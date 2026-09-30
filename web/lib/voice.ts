@@ -13,7 +13,8 @@ export type VoicePeer = {
   camOn: boolean;
   speaking: boolean;
   quality: "good" | "fair" | "poor" | "unknown";
-  video: Track | null; // camera track to attach, when on and subscribed
+  video: Track | null; // camera track to attach, when on, subscribed and not hidden
+  videoHidden: boolean; // camera is on, but we chose not to watch it
 };
 
 export type VoiceStatus =
@@ -30,10 +31,23 @@ export type VoiceState = {
   micOn: boolean;
   camOn: boolean;
   pushToTalk: boolean; // mic is on only while held
-  othersSpeaking: boolean; // someone else is talking: the film ducks
+  // Someone is talking, us included: the film ducks. Ducking for our own voice too keeps the
+  // film from fighting echo cancellation, which otherwise chops up what others hear.
+  duckFilm: boolean;
   needsAudioTap: boolean; // browser blocked autoplay of voices until a gesture
   notice: { id: number; text: string } | null;
+  tilesHidden: boolean; // all tiles folded into one pill (remembered on this device)
 };
+
+const TILES_KEY = "anda.tiles";
+
+function readTilesHidden(): boolean {
+  try {
+    return localStorage.getItem(TILES_KEY) === "hidden";
+  } catch {
+    return false;
+  }
+}
 
 const QUALITY: Record<string, VoicePeer["quality"]> = { excellent: "good", good: "good", poor: "fair", lost: "poor" };
 
@@ -49,6 +63,7 @@ export class VoiceSession {
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private attempts = 0;
   private remoteVideoPaused = false; // our own link is struggling: incoming cameras are off
+  private hiddenVideo = new Set<number>(); // people whose camera we chose not to watch
   private busy = false;
   private headphonesHinted = false;
   private state: VoiceState = {
@@ -57,9 +72,10 @@ export class VoiceSession {
     micOn: false,
     camOn: false,
     pushToTalk: false,
-    othersSpeaking: false,
+    duckFilm: false,
     needsAudioTap: false,
     notice: null,
+    tilesHidden: typeof window === "undefined" ? false : readTilesHidden(),
   };
 
   constructor(code: string) {
@@ -95,8 +111,15 @@ export class VoiceSession {
       dynacast: true, // don't send layers nobody is watching
       audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       videoCaptureDefaults: { resolution: lk.VideoPresets.h360.resolution, facingMode: "user" },
-      // Simulcast: weak viewers get a low layer. Audio is Opus with DTX and RED for loss.
-      publishDefaults: { simulcast: true, videoSimulcastLayers: [lk.VideoPresets.h180], dtx: true, red: true },
+      // Simulcast: weak viewers get a low layer. Audio is Opus tuned for speech (24 kbps, not
+      // the 48 kbps music default) with DTX and RED, so a shaky link has less to lose.
+      publishDefaults: {
+        simulcast: true,
+        videoSimulcastLayers: [lk.VideoPresets.h180],
+        audioPreset: lk.AudioPresets.speech,
+        dtx: true,
+        red: true,
+      },
     });
     this.wire(room, lk);
     try {
@@ -146,6 +169,38 @@ export class VoiceSession {
     if (down && this.state.micOn) return; // already talking normally
     this.patch({ pushToTalk: down });
     await this.setMic(down);
+  }
+
+  /**
+   * Stop (or resume) watching one person's camera. Their video stops being sent to us too,
+   * which saves bandwidth; their voice carries on. Our own tile only hides the self-view.
+   */
+  setVideoHidden(id: number, hidden: boolean) {
+    if (hidden) this.hiddenVideo.add(id);
+    else this.hiddenVideo.delete(id);
+    this.applyVideoEnabled();
+    this.refresh();
+  }
+
+  /** Fold every tile into one pill, or bring them back. Remembered on this device. */
+  setTilesHidden(hidden: boolean) {
+    try {
+      if (hidden) localStorage.setItem(TILES_KEY, "hidden");
+      else localStorage.removeItem(TILES_KEY);
+    } catch {
+      // storage blocked: it just won't be remembered
+    }
+    this.patch({ tilesHidden: hidden });
+    this.applyVideoEnabled();
+    this.refresh();
+  }
+
+  // Receive a remote camera only if our link is fine and we're actually showing it.
+  private applyVideoEnabled() {
+    this.forRemoteVideo((pub, id) => {
+      const want = !this.remoteVideoPaused && !this.state.tilesHidden && !this.hiddenVideo.has(id);
+      if (pub.isEnabled !== want) pub.setEnabled(want);
+    });
   }
 
   async toggleCamera() {
@@ -213,6 +268,7 @@ export class VoiceSession {
       .on(E.LocalTrackUnpublished, refresh)
       .on(E.ActiveSpeakersChanged, refresh)
       .on(E.TrackSubscribed, (track, pub) => {
+        if (track.kind === lk.Track.Kind.Video) this.applyVideoEnabled();
         if (track.kind === lk.Track.Kind.Audio) {
           const el = track.attach();
           el.style.display = "none";
@@ -238,7 +294,7 @@ export class VoiceSession {
         this.room = null;
         this.audioEls.forEach((el) => el.remove());
         this.audioEls.clear();
-        this.patch({ micOn: false, camOn: false, pushToTalk: false, peers: [], othersSpeaking: false });
+        this.patch({ micOn: false, camOn: false, pushToTalk: false, peers: [], duckFilm: false });
         this.retryLater();
       });
   }
@@ -271,7 +327,7 @@ export class VoiceSession {
       this.recoverTimer = setTimeout(() => {
         this.recoverTimer = undefined;
         this.remoteVideoPaused = false;
-        this.forRemoteVideo((pub) => pub.setEnabled(true));
+        this.applyVideoEnabled();
         this.refresh();
       }, 15_000);
     }
@@ -288,14 +344,14 @@ export class VoiceSession {
     }
     if (!this.remoteVideoPaused) {
       this.remoteVideoPaused = true;
-      this.forRemoteVideo((pub) => pub.setEnabled(false));
+      this.applyVideoEnabled();
       this.refresh();
     }
   }
 
-  private forRemoteVideo(fn: (pub: RemoteTrackPublication) => void) {
+  private forRemoteVideo(fn: (pub: RemoteTrackPublication, id: number) => void) {
     this.room?.remoteParticipants.forEach((p) =>
-      p.videoTrackPublications.forEach((pub) => fn(pub as RemoteTrackPublication)),
+      p.videoTrackPublications.forEach((pub) => fn(pub as RemoteTrackPublication, Number(p.identity))),
     );
   }
 
@@ -312,15 +368,18 @@ export class VoiceSession {
       const micOn = !!mic && !mic.isMuted;
       const camOn = !!cam && !cam.isMuted && (p.isLocal || !this.remoteVideoPaused);
       if (!micOn && !camOn) continue; // only people actually on voice or camera get a tile
+      const id = Number(p.identity);
+      const videoHidden = camOn && this.hiddenVideo.has(id);
       peers.push({
-        id: Number(p.identity),
+        id,
         name: p.name || p.identity,
         self: p.isLocal,
         micOn,
         camOn,
         speaking: p.isSpeaking,
         quality: QUALITY[p.connectionQuality] ?? "unknown",
-        video: camOn ? (cam?.track ?? null) : null,
+        video: camOn && !videoHidden ? (cam?.track ?? null) : null,
+        videoHidden,
       });
     }
     const micPub = local.getTrackPublication(lk.Track.Source.Microphone);
@@ -329,7 +388,7 @@ export class VoiceSession {
       peers,
       micOn: !!micPub && !micPub.isMuted && !this.state.pushToTalk,
       camOn: !!camPub && !camPub.isMuted,
-      othersSpeaking: peers.some((p) => !p.self && p.speaking),
+      duckFilm: peers.some((p) => p.speaking),
     });
   }
 

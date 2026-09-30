@@ -124,7 +124,7 @@ function WideLayout({ view, conn, voice, vs, onPick, onSwitch }: LayoutProps) {
         <Stage view={view} conn={conn} voice={voice} vs={vs} onPick={onPick} onSwitch={onSwitch} />
         {/* Above the player's own overlays ("Join the screening" z-20), below its cards (z-30). */}
         <div className="absolute top-[72px] right-3 z-[25]">
-          <VoiceTiles state={vs} />
+          <VoiceTiles voice={voice} state={vs} />
         </div>
       </div>
       <RoomHeader
@@ -206,7 +206,7 @@ function PhoneLayout({ view, conn, voice, vs, onPick, onSwitch }: LayoutProps) {
           <Stage view={view} conn={conn} voice={voice} vs={vs} onPick={onPick} onSwitch={onSwitch} compact />
         </div>
         <div className="absolute inset-x-0 top-[calc(60px+env(safe-area-inset-top))] z-[25] flex justify-end">
-          <VoiceTiles state={vs} compact extra={view.media ? <PhoneCameraButton voice={voice} state={vs} /> : null} />
+          <VoiceTiles voice={voice} state={vs} compact extra={view.media ? <PhoneCameraButton voice={voice} state={vs} /> : null} />
         </div>
       </motion.div>
       <div ref={headerRef} className="absolute inset-x-2 top-[max(8px,env(safe-area-inset-top))] z-30">
@@ -251,7 +251,7 @@ function Stage({ view, conn, vs, onPick, onSwitch, compact }: LayoutProps & { co
         view={view}
         conn={conn}
         compact={compact}
-        duck={vs.othersSpeaking}
+        duck={vs.duckFilm}
         onChangeFilm={onPick}
         onSwitch={view.media.catalog_id ? onSwitch : undefined}
       />

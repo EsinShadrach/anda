@@ -1,6 +1,14 @@
 import { useEffect, useRef } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { MicrophoneIcon, MicrophoneSlashIcon, VideoCameraIcon, VideoCameraSlashIcon, WarningIcon } from "@phosphor-icons/react";
+import {
+  EyeSlashIcon,
+  MicrophoneIcon,
+  MicrophoneSlashIcon,
+  UsersThreeIcon,
+  VideoCameraIcon,
+  VideoCameraSlashIcon,
+  WarningIcon,
+} from "@phosphor-icons/react";
 import type { Track } from "livekit-client";
 import type { VoicePeer, VoiceSession, VoiceState } from "@/lib/voice";
 import { Avatar } from "@/components/ui/avatar";
@@ -88,41 +96,89 @@ export function PhoneCameraButton({ voice, state }: { voice: VoiceSession; state
 }
 
 // Who's on voice or camera, over the stage: camera tiles, and small chips for voice only.
-export function VoiceTiles({ state, compact, extra }: { state: VoiceState; compact?: boolean; extra?: React.ReactNode }) {
+// Any camera can be hidden (it stops being sent to us), and the whole strip can fold into
+// one pill for people who'd rather just watch the film.
+export function VoiceTiles({
+  voice,
+  state,
+  compact,
+  extra,
+}: {
+  voice: VoiceSession;
+  state: VoiceState;
+  compact?: boolean;
+  extra?: React.ReactNode;
+}) {
+  const n = state.peers.length;
+  const anyoneSpeaking = state.peers.some((p) => p.speaking);
   return (
     <div
       className={`pointer-events-none flex gap-2 ${
         compact ? "flex-row items-start overflow-x-auto overscroll-x-contain px-2 [scrollbar-width:none]" : "w-[176px] flex-col items-end"
       }`}
     >
+      {n > 0 && (
+        <button
+          onClick={() => voice.setTilesHidden(!state.tilesHidden)}
+          aria-label={state.tilesHidden ? `Show voice and camera (${n})` : "Hide voice and camera tiles"}
+          title={state.tilesHidden ? "Show tiles" : "Hide tiles"}
+          className={`glass press pointer-events-auto flex h-9 shrink-0 items-center gap-1.5 rounded-full px-3 text-[12px] font-semibold text-fog-100 select-none ring-2 transition-shadow duration-150 ${
+            state.tilesHidden && anyoneSpeaking ? "ring-live" : "ring-transparent"
+          }`}
+        >
+          {state.tilesHidden ? (
+            <>
+              <UsersThreeIcon size={16} weight={anyoneSpeaking ? "fill" : "regular"} className={anyoneSpeaking ? "text-live" : ""} />
+              {n} on voice
+            </>
+          ) : (
+            <>
+              <EyeSlashIcon size={15} /> <span className={compact ? "sr-only" : ""}>Hide</span>
+            </>
+          )}
+        </button>
+      )}
       <AnimatePresence initial={false}>
-        {state.peers.map((p) => (
-          <motion.div
-            key={p.id}
-            layout
-            initial={{ opacity: 0, scale: 0.9, filter: "blur(6px)" }}
-            animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
-            exit={{ opacity: 0, scale: 0.9, filter: "blur(4px)", transition: { duration: 0.15 } }}
-            transition={{ type: "spring", bounce: 0, duration: 0.35 }}
-            className="pointer-events-auto shrink-0"
-          >
-            {p.camOn && p.video ? <CameraTile peer={p} compact={compact} /> : <VoiceChip peer={p} />}
-          </motion.div>
-        ))}
+        {!state.tilesHidden &&
+          state.peers.map((p) => (
+            <motion.div
+              key={p.id}
+              layout
+              initial={{ opacity: 0, scale: 0.9, filter: "blur(6px)" }}
+              animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
+              exit={{ opacity: 0, scale: 0.9, filter: "blur(4px)", transition: { duration: 0.15 } }}
+              transition={{ type: "spring", bounce: 0, duration: 0.35 }}
+              className="pointer-events-auto shrink-0"
+            >
+              {p.camOn && p.video ? (
+                <CameraTile peer={p} compact={compact} onHide={() => voice.setVideoHidden(p.id, true)} />
+              ) : (
+                <VoiceChip peer={p} onShowVideo={p.videoHidden ? () => voice.setVideoHidden(p.id, false) : undefined} />
+              )}
+            </motion.div>
+          ))}
       </AnimatePresence>
       {extra}
     </div>
   );
 }
 
-function CameraTile({ peer, compact }: { peer: VoicePeer; compact?: boolean }) {
+function CameraTile({ peer, compact, onHide }: { peer: VoicePeer; compact?: boolean; onHide: () => void }) {
   return (
     <div
-      className={`relative overflow-hidden rounded-2xl bg-ink-800 shadow-[0_8px_24px_-8px_rgb(0_0_0/0.6)] ring-2 transition-shadow duration-150 ${
+      className={`group relative overflow-hidden rounded-2xl bg-ink-800 shadow-[0_8px_24px_-8px_rgb(0_0_0/0.6)] ring-2 transition-shadow duration-150 ${
         peer.speaking ? "ring-live" : "ring-white/8"
       } ${compact ? "h-[63px] w-[112px]" : "h-[99px] w-[176px]"}`}
     >
       <TrackVideo track={peer.video!} mirror={peer.self} />
+      <button
+        onClick={onHide}
+        aria-label={peer.self ? "Hide your self-view" : `Hide ${peer.name}\u2019s video`}
+        title={peer.self ? "Hide your self-view (others still see you)" : `Hide ${peer.name}\u2019s video`}
+        className="press absolute top-1.5 right-1.5 grid size-7 place-items-center rounded-full bg-black/55 text-white backdrop-blur-md transition-opacity duration-150 pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:focus-visible:opacity-100"
+      >
+        <EyeSlashIcon size={14} />
+      </button>
       <span className="absolute inset-x-0 bottom-0 flex items-center gap-1 bg-gradient-to-t from-black/70 to-transparent px-2 pt-4 pb-1 text-[11px] font-semibold text-white">
         {!peer.micOn && <MicrophoneSlashIcon size={11} className="shrink-0 text-fog-300" />}
         <span className="truncate">{peer.self ? "You" : peer.name}</span>
@@ -132,16 +188,30 @@ function CameraTile({ peer, compact }: { peer: VoicePeer; compact?: boolean }) {
   );
 }
 
-function VoiceChip({ peer }: { peer: VoicePeer }) {
+function VoiceChip({ peer, onShowVideo }: { peer: VoicePeer; onShowVideo?: () => void }) {
   return (
     <span
-      className={`glass flex h-9 items-center gap-2 rounded-full py-1 pr-3 pl-1 text-[12px] font-semibold text-fog-50 ring-2 transition-shadow duration-150 ${
+      className={`glass flex h-9 items-center gap-2 rounded-full py-1 pl-1 text-[12px] font-semibold text-fog-50 ring-2 transition-shadow duration-150 ${
         peer.speaking ? "ring-live" : "ring-transparent"
-      }`}
+      } ${onShowVideo ? "pr-1" : "pr-3"}`}
     >
       <Avatar name={peer.name} size={28} />
       <span className="max-w-[9ch] truncate">{peer.self ? "You" : peer.name}</span>
-      <MicrophoneIcon size={13} weight={peer.speaking ? "fill" : "regular"} className={peer.speaking ? "text-live" : "text-fog-500"} />
+      <MicrophoneIcon
+        size={13}
+        weight={peer.speaking ? "fill" : "regular"}
+        className={peer.micOn ? (peer.speaking ? "text-live" : "text-fog-500") : "hidden"}
+      />
+      {onShowVideo && (
+        <button
+          onClick={onShowVideo}
+          aria-label={peer.self ? "Show your self-view" : `Show ${peer.name}\u2019s video`}
+          title="Show video"
+          className="press grid size-7 place-items-center rounded-full bg-white/10 text-fog-100 hover:bg-white/15"
+        >
+          <VideoCameraIcon size={14} />
+        </button>
+      )}
     </span>
   );
 }
