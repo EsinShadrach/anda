@@ -305,3 +305,29 @@ func newCode() (string, error) {
 	}
 	return string(b), nil
 }
+
+// MediaInUse reports the films live rooms are showing, so the cache never evicts them.
+func (m *Manager) MediaInUse() map[int64]bool {
+	m.mu.Lock()
+	live := make([]*Room, 0, len(m.live))
+	for _, r := range m.live {
+		live = append(live, r)
+	}
+	m.mu.Unlock()
+	out := map[int64]bool{}
+	for _, r := range live {
+		ch := make(chan int64, 1)
+		if r.do(func() {
+			if r.pb.media != nil {
+				ch <- r.pb.media.ID
+			} else {
+				ch <- 0
+			}
+		}) {
+			if id := <-ch; id != 0 {
+				out[id] = true
+			}
+		}
+	}
+	return out
+}

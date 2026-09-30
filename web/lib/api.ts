@@ -71,8 +71,76 @@ export function cleanCode(input: string): string {
     .slice(0, 6);
 }
 
-export type Film = { id: number; title: string; url: string; size_bytes: number; last_watched_at?: number };
+export type Film = {
+  id: number;
+  title: string;
+  url: string;
+  size_bytes: number;
+  duration?: number;
+  poster?: string;
+  year?: string;
+  state?: "ready" | "preparing";
+  last_watched_at?: number;
+};
+
+/** A search result from the catalog (Cinemeta) or the built-in open films. */
+export type CatalogFilm = { id: string; name: string; year?: string; poster?: string; free?: boolean };
+
+export type FilmDetails = {
+  id: string;
+  name: string;
+  year?: string;
+  poster?: string;
+  background?: string;
+  description?: string;
+  runtime?: string;
+  genres?: string[];
+};
+
+export type LibraryStream = {
+  key: string;
+  release: string;
+  source: string;
+  quality?: string;
+  size_bytes?: number;
+  seeders?: number;
+};
+
+export type Progress = {
+  state: "preparing" | "ready" | "incompatible" | "failed";
+  error?: string;
+  prepared_seconds: number;
+  duration: number;
+  downloaded: number;
+  size_bytes: number;
+  speed: number;
+  peers: number;
+};
 
 export const library = {
   ready: () => request<{ films: Film[] }>("GET", "/api/library/ready").then((r) => r.films),
+  search: (q: string, signal?: AbortSignal) =>
+    requestWith<{ films: CatalogFilm[] }>(`/api/library/search?q=${encodeURIComponent(q)}`, signal).then((r) => r.films),
+  streams: (id: string, signal?: AbortSignal) =>
+    requestWith<{ meta: FilmDetails; streams: LibraryStream[]; hidden: Record<string, number> }>(
+      `/api/library/${encodeURIComponent(id)}/streams`,
+      signal,
+    ),
+  prepare: (id: string, key: string) =>
+    request<{ film: { id: number; title: string; state: string } }>(
+      "POST",
+      `/api/library/${encodeURIComponent(id)}/streams/${encodeURIComponent(key)}/prepare`,
+    ).then((r) => r.film),
+  progress: (mediaId: number) => request<Progress>("GET", `/api/media/${mediaId}/progress`),
 };
+
+// GET with an abort signal, for type-ahead search.
+async function requestWith<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const res = await fetch(path, { credentials: "same-origin", signal });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    const err = data?.error;
+    throw new ApiError(res.status, err?.code ?? "unknown", err?.message ?? `Request failed (${res.status})`);
+  }
+  return data as T;
+}

@@ -9,15 +9,18 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"anda/internal/auth"
 	"anda/internal/gateway"
+	"anda/internal/library"
 	"anda/internal/media"
 	"anda/internal/rooms"
 	"anda/internal/store"
+	"anda/internal/torrent"
 )
 
 func main() {
@@ -57,9 +60,22 @@ func run(log *slog.Logger) error {
 		Store:        db,
 		Authenticate: authSvc.UserFromRequest,
 		Log:          log,
+		CacheBytes:   int64(envInt("ANDA_CACHE_GB", 10)) << 30,
 	}
-	go films.Run(ctx)
+	if u := os.Getenv("ANDA_TORRENT_URL"); u != "" { // Stremio's streaming server
+		films.Torrent = torrent.New(u)
+	}
 	roomMgr := rooms.NewManager(db, db, films, log)
+	films.InUse = roomMgr.MediaInUse
+	go films.Run(ctx)
+
+	lib := &library.Service{
+		Catalog:      env("ANDA_CATALOG_ADDON", "https://v3-cinemeta.strem.io"),
+		StreamAddons: splitList(os.Getenv("ANDA_STREAM_ADDONS")),
+		Media:        films,
+		Authenticate: authSvc.UserFromRequest,
+		Log:          log,
+	}
 	// Extra WebSocket origins, e.g. "localhost:3000" for the Next dev server.
 	var origins []string
 	if v := os.Getenv("ANDA_WS_ORIGINS"); v != "" {
@@ -72,6 +88,7 @@ func run(log *slog.Logger) error {
 	(&rooms.Handlers{Manager: roomMgr, Users: db, Authenticate: authSvc.UserFromRequest, Log: log}).Register(mux)
 	gw.Register(mux)
 	films.Register(mux)
+	lib.Register(mux)
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		if err := db.Ping(r.Context()); err != nil {
 			http.Error(w, "db unavailable", http.StatusServiceUnavailable)
@@ -112,4 +129,22 @@ func env(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func envInt(key string, fallback int) int {
+	if n, err := strconv.Atoi(os.Getenv(key)); err == nil && n > 0 {
+		return n
+	}
+	return fallback
+}
+
+// splitList parses a comma-separated env value, dropping blanks.
+func splitList(v string) []string {
+	var out []string
+	for _, s := range strings.Split(v, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }

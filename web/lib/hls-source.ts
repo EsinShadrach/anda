@@ -28,6 +28,9 @@ export async function attachHls(video: HTMLVideoElement, url: string, onFatal: (
     maxMaxBufferLength: 120,
     backBufferLength: 30,
     enableWorker: true,
+    // A film still downloading is an EVENT playlist, which hls.js treats as live and would
+    // start at the newest segment. The room decides the position, so start at the top.
+    startPosition: 0,
   });
   let networkRetries = 0;
   let recovered = false;

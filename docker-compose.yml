@@ -1,5 +1,5 @@
-# Anda on the shared 1 vCPU / 1 GB VM. Limits total 160 MB (budget ~150 MB; the API needs
-# the extra for ffmpeg remuxes, fine while Pulse is stopped; see CLAUDE.md).
+# Anda on the 1 vCPU / 1 GB VM. Limits total ~416 MB: that only fits while Pulse is stopped
+# (see CLAUDE.md). The torrent engine is the big one.
 # No published ports: Caddy in ../proxy reaches us on the "edge" network as anda-api / anda-web.
 services:
   api:
@@ -8,10 +8,16 @@ services:
     environment:
       ANDA_SECURE_COOKIE: "true"   # served over HTTPS via Caddy
       ANDA_TRUST_PROXY: "true"     # client IP from X-Forwarded-For, set by Caddy
-      GOMEMLIMIT: 64MiB            # Go heap; leaves room for an ffmpeg remux (~30 MB peak)
+      GOMEMLIMIT: 64MiB            # Go heap; leaves room for ffmpeg remuxes (~30 MB each)
+      ANDA_TORRENT_URL: http://torrent:11470
+      ANDA_CACHE_GB: "8"           # finished Library films; least recently watched evicted past this
+      # Extra Stremio stream addons (comma-separated base URLs), set in ~/anda/.env on the VM.
+      # The built-in open films work without any.
+      ANDA_STREAM_ADDONS: ${ANDA_STREAM_ADDONS:-}
     volumes:
       - data:/data                 # SQLite file, films (/data/media) and their HLS (/data/hls)
     networks:
+      default: {}                  # to reach the torrent engine
       edge:
         aliases: [anda-api]
     mem_limit: 128m
@@ -24,9 +30,21 @@ services:
         aliases: [anda-web]
     mem_limit: 32m
 
+  # Stremio's streaming server: downloads torrents on demand and serves files as seekable
+  # HTTP streams to the API's ffmpeg. Internal only (default network, no ports).
+  torrent:
+    image: stremio/server:latest
+    restart: unless-stopped
+    environment:
+      NODE_OPTIONS: --max-old-space-size=160   # Node 14 doesn't size its heap to the container
+    volumes:
+      - torrent:/root/.stremio-server          # its own bounded cache (2 GB) and settings
+    mem_limit: 256m
+
 networks:
   edge:
     external: true
 
 volumes:
   data:
+  torrent:

@@ -9,7 +9,7 @@ import { ChatSheet } from "./chat-sheet";
 import { RoomDialogs } from "./room-dialogs";
 import { RoomGone } from "./room-gone";
 import { Player } from "./player";
-import { FilmPicker } from "./film-picker";
+import { Library } from "./library";
 import { Button } from "@/components/ui/button";
 
 function useIsPhone() {
@@ -45,11 +45,11 @@ export function RoomView({ code }: { code: string }) {
       ) : (
         <WideLayout view={view} conn={conn} onPick={() => setPicking(true)} />
       )}
-      <FilmPicker
+      <Library
         open={picking}
         onClose={() => setPicking(false)}
-        onPick={(f) => {
-          conn.setMedia(f.id);
+        onPick={(mediaId) => {
+          conn.setMedia(mediaId);
           setPicking(false);
         }}
       />

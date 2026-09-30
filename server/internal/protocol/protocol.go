@@ -121,6 +121,11 @@ type Media struct {
 	Title    string  `json:"title"`
 	URL      string  `json:"url"`                // HLS playlist
 	Duration float64 `json:"duration,omitempty"` // seconds
+	Poster   string  `json:"poster,omitempty"`
+	Year     string  `json:"year,omitempty"`
+	// State is "preparing" while a torrent film is still downloading (its playlist grows;
+	// poll /api/media/{id}/progress), "ready" once complete.
+	State string `json:"state"`
 }
 
 // PlaybackState anchors the room clock: at ServerTime the film was at Position. While the

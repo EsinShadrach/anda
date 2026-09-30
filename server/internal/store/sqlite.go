@@ -285,7 +285,7 @@ func (s *SQLite) ReadyMedia(ctx context.Context) ([]Media, error) {
 }
 
 func (s *SQLite) MediaNeedingHLS(ctx context.Context) ([]Media, error) {
-	return s.mediaList(ctx, mediaCols+` WHERE status = 'ready' AND hls_state IN ('pending', 'remuxing') ORDER BY id`)
+	return s.mediaList(ctx, mediaCols+` WHERE source = 'local' AND status = 'ready' AND hls_state IN ('pending', 'remuxing') ORDER BY id`)
 }
 
 func (s *SQLite) SetHLSState(ctx context.Context, id int64, state, errMsg string) error {
@@ -323,14 +323,16 @@ func (s *SQLite) TouchMedia(ctx context.Context, id int64, at time.Time) error {
 }
 
 const mediaCols = `SELECT id, title, size_bytes, status, path, COALESCE(last_watched_at, 0),
-	hls_state, COALESCE(hls_error, ''), COALESCE(video_codec, ''), COALESCE(audio_codec, ''), COALESCE(duration_seconds, 0)
+	hls_state, COALESCE(hls_error, ''), COALESCE(video_codec, ''), COALESCE(audio_codec, ''), COALESCE(duration_seconds, 0),
+	source, COALESCE(catalog_id, ''), COALESCE(info_hash, ''), COALESCE(file_idx, 0), COALESCE(poster, ''), COALESCE(year, '')
 	FROM media`
 
 func (s *SQLite) scanMedia(row interface{ Scan(...any) error }) (Media, error) {
 	var m Media
 	var watched int64
 	if err := row.Scan(&m.ID, &m.Title, &m.SizeBytes, &m.Status, &m.Path, &watched,
-		&m.HLSState, &m.HLSError, &m.VideoCodec, &m.AudioCodec, &m.Duration); err != nil {
+		&m.HLSState, &m.HLSError, &m.VideoCodec, &m.AudioCodec, &m.Duration,
+		&m.Source, &m.CatalogID, &m.InfoHash, &m.FileIdx, &m.Poster, &m.Year); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Media{}, ErrNotFound
 		}
@@ -340,4 +342,36 @@ func (s *SQLite) scanMedia(row interface{ Scan(...any) error }) (Media, error) {
 		m.LastWatchedAt = time.Unix(watched, 0)
 	}
 	return m, nil
+}
+
+func (s *SQLite) UpsertTorrentMedia(ctx context.Context, t TorrentMedia) (Media, error) {
+	path := fmt.Sprintf("torrent/%s/%d", t.InfoHash, t.FileIdx) // unique placeholder; torrent films live in the HLS dir
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO media (title, size_bytes, status, path, source, catalog_id, info_hash, file_idx, poster, year)
+		VALUES (?, ?, 'downloading', ?, 'torrent', NULLIF(?, ''), ?, ?, NULLIF(?, ''), NULLIF(?, ''))
+		ON CONFLICT (path) DO NOTHING`,
+		t.Title, t.SizeBytes, path, t.CatalogID, t.InfoHash, t.FileIdx, t.Poster, t.Year)
+	if err != nil {
+		return Media{}, err
+	}
+	return s.scanMedia(s.db.QueryRowContext(ctx, mediaCols+` WHERE path = ?`, path))
+}
+
+func (s *SQLite) SetMediaStatus(ctx context.Context, id int64, status string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE media SET status = ? WHERE id = ?`, status, id)
+	return err
+}
+
+func (s *SQLite) TorrentMediaInProgress(ctx context.Context) ([]Media, error) {
+	return s.mediaList(ctx, mediaCols+` WHERE source = 'torrent' AND hls_state IN ('pending', 'remuxing') ORDER BY id`)
+}
+
+func (s *SQLite) ReadyTorrentMedia(ctx context.Context) ([]Media, error) {
+	return s.mediaList(ctx, mediaCols+` WHERE source = 'torrent' AND status = 'ready' AND hls_state = 'ready'
+		ORDER BY COALESCE(last_watched_at, 0), id`)
+}
+
+func (s *SQLite) DeleteMedia(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM media WHERE id = ?`, id)
+	return err
 }

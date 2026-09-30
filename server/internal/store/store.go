@@ -102,6 +102,24 @@ type Media struct {
 	VideoCodec string
 	AudioCodec string
 	Duration   float64 // seconds, once probed
+
+	Source    string // local | torrent
+	CatalogID string // e.g. an IMDb ID, for torrent films
+	InfoHash  string
+	FileIdx   int
+	Poster    string
+	Year      string
+}
+
+// TorrentMedia describes a film picked from a Library stream.
+type TorrentMedia struct {
+	Title     string
+	CatalogID string
+	InfoHash  string
+	FileIdx   int
+	SizeBytes int64
+	Poster    string
+	Year      string
 }
 
 // HLS states.
@@ -127,4 +145,15 @@ type MediaStore interface {
 	SetHLSState(ctx context.Context, id int64, state, errMsg string) error
 	SetProbe(ctx context.Context, id int64, videoCodec, audioCodec string, duration float64) error
 	TouchMedia(ctx context.Context, id int64, at time.Time) error
+
+	// UpsertTorrentMedia returns the film for (info hash, file), creating it as
+	// downloading/pending if it's new.
+	UpsertTorrentMedia(ctx context.Context, t TorrentMedia) (Media, error)
+	SetMediaStatus(ctx context.Context, id int64, status string) error
+	// TorrentMediaInProgress lists torrent films whose preparation was interrupted.
+	TorrentMediaInProgress(ctx context.Context) ([]Media, error)
+	// ReadyTorrentMedia lists finished torrent films, least recently watched first
+	// (eviction order).
+	ReadyTorrentMedia(ctx context.Context) ([]Media, error)
+	DeleteMedia(ctx context.Context, id int64) error
 }

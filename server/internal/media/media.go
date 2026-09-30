@@ -5,6 +5,7 @@ package media
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	"anda/internal/httpx"
 	"anda/internal/protocol"
 	"anda/internal/store"
+	"anda/internal/torrent"
 )
 
 // Containers worth probing. Whether the streams inside are playable is ffprobe's call.
@@ -35,14 +37,25 @@ type Service struct {
 	Authenticate func(*http.Request) (store.User, error)
 	Log          *slog.Logger
 
+	// Torrent is Stremio's streaming server; nil disables Library downloads.
+	Torrent *torrent.Client
+	// CacheBytes caps finished torrent films on disk; least recently watched go first.
+	CacheBytes int64
+	// InUse reports films a live room is showing (never evicted).
+	InUse func() map[int64]bool
+
+	ctx   context.Context
 	queue chan store.Media
+	tj    torrentJobs
 }
 
 // Run scans the media directory now and every few minutes, and prepares new films one at
 // a time until ctx ends.
 func (s *Service) Run(ctx context.Context) {
+	s.ctx = ctx
 	s.queue = make(chan store.Media, 64)
 	go s.worker(ctx)
+	s.resumeTorrents(ctx)
 	t := time.NewTicker(rescanEvery)
 	defer t.Stop()
 	for {
@@ -117,6 +130,7 @@ func (s *Service) scan(ctx context.Context) error {
 func (s *Service) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/library/ready", s.handleReady)
 	mux.HandleFunc("GET /media/{id}/{file}", s.handleHLS)
+	mux.HandleFunc("GET /api/media/{id}/progress", s.handleProgress)
 }
 
 // Info returns the protocol description of a playable film, for set_media and room_state.
@@ -125,10 +139,38 @@ func (s *Service) Info(ctx context.Context, id int64) (protocol.Media, error) {
 	if err != nil {
 		return protocol.Media{}, err
 	}
-	if m.Status != "ready" || m.HLSState != store.HLSReady {
-		return protocol.Media{}, store.ErrNotFound
+	if m.Status == "ready" && m.HLSState == store.HLSReady {
+		return toProto(m), nil
 	}
-	return toProto(m), nil
+	// A torrent film still being prepared can go on the room's screen right away: players
+	// poll its progress and start once enough of it exists.
+	if m.Source == "torrent" && (m.HLSState == store.HLSPending || m.HLSState == store.HLSRemuxing) {
+		return toProto(m), nil
+	}
+	return protocol.Media{}, store.ErrNotFound
+}
+
+func (s *Service) handleProgress(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.Authenticate(r); err != nil {
+		httpx.Error(w, http.StatusUnauthorized, "not_signed_in", "Not signed in.")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httpx.Error(w, http.StatusNotFound, "not_found", "No such film.")
+		return
+	}
+	p, err := s.Progress(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		httpx.Error(w, http.StatusNotFound, "not_found", "No such film.")
+		return
+	}
+	if err != nil {
+		s.Log.Error("media progress", "err", err)
+		httpx.Error(w, http.StatusInternalServerError, "internal", "Something went wrong.")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, p)
 }
 
 func (s *Service) Touch(ctx context.Context, id int64) {
@@ -211,10 +253,17 @@ func (s *Service) handleHLS(w http.ResponseWriter, r *http.Request) {
 }
 
 func toProto(m store.Media) protocol.Media {
+	state := "ready"
+	if m.HLSState != store.HLSReady {
+		state = "preparing"
+	}
 	return protocol.Media{
 		ID:       m.ID,
 		Title:    m.Title,
 		URL:      "/media/" + strconv.FormatInt(m.ID, 10) + "/index.m3u8",
 		Duration: m.Duration,
+		Poster:   m.Poster,
+		Year:     m.Year,
+		State:    state,
 	}
 }

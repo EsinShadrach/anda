@@ -19,7 +19,16 @@ export type ChatItem =
     }
   | { kind: "system"; key: string; text: string; time: number; live: boolean };
 
-export type Media = { id: number; title: string; url: string };
+export type Media = {
+  id: number;
+  title: string;
+  url: string;
+  duration?: number;
+  poster?: string;
+  year?: string;
+  /** "preparing" while a Library film downloads; poll library.progress until "ready". */
+  state?: "ready" | "preparing";
+};
 
 export type PlaybackState = { want: "playing" | "paused"; position: number; rate: number; server_time: number };
 
