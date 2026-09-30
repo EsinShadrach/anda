@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -84,8 +85,14 @@ func (s *Service) queueAllRungs(ctx context.Context) {
 func (s *Service) makeRung(ctx context.Context, id int64) error {
 	dir := s.hlsDir(id)
 	src := filepath.Join(dir, "stream_v.m3u8")
-	if _, err := os.Stat(filepath.Join(dir, "stream_l.m3u8")); err == nil {
-		return nil // already has one
+	upgrade := false
+	if old, _, err := readPlaylist(filepath.Join(dir, "stream_l.m3u8")); err == nil {
+		// Rungs made before fast starts followed the original's keyframes (6-15s segments):
+		// redo those with 2s keyframes; anything else is done.
+		if slices.Max(append(old, 0)) <= rungKeyEvery+0.5 {
+			return nil
+		}
+		upgrade = true
 	}
 	segs, done, err := readPlaylist(src)
 	if err != nil || !done || len(segs) == 0 {
@@ -106,7 +113,7 @@ func (s *Service) makeRung(ctx context.Context, id int64) error {
 	}
 
 	log := s.Log.With("media", id, "video_kbps", int(kbps), "avg_segment", fmt.Sprintf("%.1fs", avgSeg), "size", fmt.Sprintf("%dx%d", w, h))
-	log.Info("making low-quality copy")
+	log.Info("making low-quality copy", "replacing_old", upgrade)
 	start := time.Now()
 	tmp := filepath.Join(dir, ".low")
 	os.RemoveAll(tmp)
@@ -152,10 +159,16 @@ func (s *Service) makeRung(ctx context.Context, id int64) error {
 		return fmt.Errorf("low rung playlist incomplete: %v", err)
 	}
 
-	// Move it in (files first, playlist last), then list it in the master playlist.
+	// Move it in (files first, playlist last), then list it in the master playlist. When
+	// replacing an old rung, its files are overwritten in place and leftovers removed after
+	// the new playlist is in, so the rung never disappears for someone watching on it.
 	entries, err := os.ReadDir(tmp)
 	if err != nil {
 		return err
+	}
+	fresh := map[string]bool{}
+	for _, e := range entries {
+		fresh[e.Name()] = true
 	}
 	for _, e := range entries {
 		if e.Name() != "stream_l.m3u8" {
@@ -166,6 +179,14 @@ func (s *Service) makeRung(ctx context.Context, id int64) error {
 	}
 	if err := os.Rename(filepath.Join(tmp, "stream_l.m3u8"), filepath.Join(dir, "stream_l.m3u8")); err != nil {
 		return err
+	}
+	if upgrade {
+		all, _ := os.ReadDir(dir)
+		for _, e := range all {
+			if strings.HasPrefix(e.Name(), "seg_l_") && !fresh[e.Name()] {
+				os.Remove(filepath.Join(dir, e.Name()))
+			}
+		}
 	}
 	lw, lh, _ := videoSize(ctx, filepath.Join(dir, "init_l.mp4"))
 	// The playlist, not init_l.mp4 alone: ffprobe reports level -99 without any samples.

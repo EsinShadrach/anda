@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -99,6 +100,24 @@ func TestLowRung(t *testing.T) {
 		if !hlsFile.MatchString(f) {
 			t.Errorf("%s isn't served", f)
 		}
+	}
+
+	// A rung made the old way (following the original's long segments) gets redone.
+	old := "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:12\n#EXT-X-MAP:URI=\"init_l.mp4\"\n#EXTINF:12.0,\nseg_l_00000.m4s\n#EXT-X-ENDLIST\n"
+	os.WriteFile(filepath.Join(heavy, "stream_l.m3u8"), []byte(old), 0o644)
+	os.WriteFile(filepath.Join(heavy, "seg_l_00099.m4s"), []byte("stale"), 0o644)
+	if err := s.makeRung(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	redone, _, _ := readPlaylist(filepath.Join(heavy, "stream_l.m3u8"))
+	if len(redone) != len(low) || slices.Max(redone) > rungKeyEvery+0.1 {
+		t.Fatalf("old rung not redone: %v", redone)
+	}
+	if _, err := os.Stat(filepath.Join(heavy, "seg_l_00099.m4s")); !os.IsNotExist(err) {
+		t.Fatal("stale segment left behind")
+	}
+	if again, _ := os.ReadFile(filepath.Join(heavy, "index.m3u8")); strings.Count(string(again), "stream_l.m3u8") != 1 {
+		t.Fatalf("master lists the rung %d times", strings.Count(string(again), "stream_l.m3u8"))
 	}
 
 	// Running again changes nothing.
