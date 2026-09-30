@@ -216,3 +216,57 @@ func (s *SQLite) RecentChatMessages(ctx context.Context, roomID int64, limit int
 	}
 	return out, nil
 }
+
+func (s *SQLite) UpsertLocalMedia(ctx context.Context, title, path string, size int64) (Media, error) {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO media (title, size_bytes, status, path) VALUES (?, ?, 'ready', ?)
+		ON CONFLICT (path) DO UPDATE SET size_bytes = excluded.size_bytes, status = 'ready'`,
+		title, size, path)
+	if err != nil {
+		return Media{}, err
+	}
+	return s.scanMedia(s.db.QueryRowContext(ctx, mediaCols+` WHERE path = ?`, path))
+}
+
+func (s *SQLite) MediaByID(ctx context.Context, id int64) (Media, error) {
+	return s.scanMedia(s.db.QueryRowContext(ctx, mediaCols+` WHERE id = ?`, id))
+}
+
+func (s *SQLite) ReadyMedia(ctx context.Context) ([]Media, error) {
+	rows, err := s.db.QueryContext(ctx, mediaCols+` WHERE status = 'ready' ORDER BY COALESCE(last_watched_at, 0) DESC, title`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Media
+	for rows.Next() {
+		m, err := s.scanMedia(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLite) TouchMedia(ctx context.Context, id int64, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE media SET last_watched_at = ? WHERE id = ?`, at.Unix(), id)
+	return err
+}
+
+const mediaCols = `SELECT id, title, size_bytes, status, path, COALESCE(last_watched_at, 0) FROM media`
+
+func (s *SQLite) scanMedia(row interface{ Scan(...any) error }) (Media, error) {
+	var m Media
+	var watched int64
+	if err := row.Scan(&m.ID, &m.Title, &m.SizeBytes, &m.Status, &m.Path, &watched); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Media{}, ErrNotFound
+		}
+		return Media{}, err
+	}
+	if watched > 0 {
+		m.LastWatchedAt = time.Unix(watched, 0)
+	}
+	return m, nil
+}

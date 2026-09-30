@@ -19,6 +19,15 @@ export type ChatItem =
     }
   | { kind: "system"; key: string; text: string; time: number; live: boolean };
 
+export type Media = { id: number; title: string; url: string };
+
+export type PlaybackState = { want: "playing" | "paused"; position: number; rate: number; server_time: number };
+
+export type Blocker = { user_id: number; username: string; reason: "buffering" | "getting_ready" };
+
+/** An action we sent and are showing optimistically until the server answers. */
+export type Intent = { want?: "playing" | "paused"; position?: number; sentSeq: number; at: number };
+
 export type ConnStatus =
   | "connecting" // first connection
   | "open"
@@ -36,6 +45,15 @@ export type RoomView = {
   members: Member[];
   chat: ChatItem[];
   notice: string | null; // short-lived inline error, e.g. rate limited
+
+  media: Media | null;
+  playback: PlaybackState | null;
+  blockers: Blocker[];
+  locked: boolean;
+  seq: number;
+  lastChange: { action: string; by: string | null } | null;
+  intent: Intent | null;
+  toast: { id: number; text: string } | null;
 };
 
 type Envelope = { type: string; v: number; payload?: any };
@@ -59,7 +77,7 @@ function writeToken(token: string) {
 }
 
 function wsURL(): string {
-  if (process.env.NODE_ENV === "development") return process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8080/ws";
+  if (process.env.NODE_ENV === "development") return process.env.NEXT_PUBLIC_WS_URL ?? `ws://${location.hostname}:8080/ws`;
   return `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
 }
 
@@ -73,6 +91,13 @@ export class RoomConnection {
   private reconnectDelay: number | null = null; // from reconnect_later
   private closedByUs = false;
   private nextClientId = 0;
+  private toastTimer: ReturnType<typeof setTimeout> | undefined;
+  private toastSeq = 0;
+
+  // Clock sync: serverNow() = Date.now() + offset, from the lowest-latency ping sample.
+  private offset = 0;
+  private bestRtt = Infinity;
+  private pingTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(code: string) {
     this.view = {
@@ -85,7 +110,92 @@ export class RoomConnection {
       members: [],
       chat: [],
       notice: null,
+      media: null,
+      playback: null,
+      blockers: [],
+      locked: false,
+      seq: 0,
+      lastChange: null,
+      intent: null,
+      toast: null,
     };
+  }
+
+  /** The server's clock, estimated from time_ping round trips. */
+  serverNow() {
+    return Date.now() + this.offset;
+  }
+
+  // --- Playback actions. The server decides; the UI shows the intent until it answers. ---
+
+  play() {
+    if (!this.canControl()) return;
+    this.intend({ want: "playing" });
+    this.send("play", { last_seq: this.view.seq, position: this.targetPosition() });
+  }
+
+  pause() {
+    if (!this.canControl()) return;
+    const position = this.targetPosition();
+    this.intend({ want: "paused", position });
+    this.send("pause", { last_seq: this.view.seq, position });
+  }
+
+  seek(position: number) {
+    if (!this.canControl()) return;
+    position = Math.max(0, position);
+    this.intend({ position });
+    this.send("seek", { last_seq: this.view.seq, position });
+  }
+
+  setMedia(streamId: number) {
+    this.send("set_media", { stream_id: streamId });
+  }
+
+  skipWait(userId: number) {
+    this.send("skip_wait", { user_id: userId });
+  }
+
+  lockControls(locked: boolean) {
+    this.send("lock_controls", { locked });
+  }
+
+  bufferReport(ahead: number, stalling: boolean) {
+    this.send("buffer_report", { ahead: Math.round(ahead * 10) / 10, stalling });
+  }
+
+  /** Where the film should be right now, by the room's clock (ignoring our intent). */
+  targetPosition(): number {
+    const p = this.view.playback;
+    if (!p) return 0;
+    const running = p.want === "playing" && this.view.blockers.length === 0;
+    return running ? p.position + ((this.serverNow() - p.server_time) / 1000) * p.rate : p.position;
+  }
+
+  private canControl() {
+    const v = this.view;
+    if (!v.media || v.status !== "open") return false;
+    if (v.locked && v.me !== v.host) {
+      this.showToast("The host has locked the controls");
+      return false;
+    }
+    return true;
+  }
+
+  private intend(i: Omit<Intent, "sentSeq" | "at">) {
+    this.set({ intent: { ...i, sentSeq: this.view.seq, at: Date.now() } });
+  }
+
+  private syncClock() {
+    // A short burst; the sample with the smallest round trip is the most trustworthy.
+    this.bestRtt = Infinity;
+    for (let i = 0; i < 5; i++) setTimeout(() => this.send("time_ping", { client_time: Date.now() }), i * 150);
+  }
+
+  private showToast(text: string) {
+    clearTimeout(this.toastTimer);
+    this.set({ toast: { id: ++this.toastSeq, text } });
+    this.toastTimer = setTimeout(() => this.set({ toast: null }), 2600);
   }
 
   subscribe = (fn: () => void) => {
@@ -105,6 +215,8 @@ export class RoomConnection {
     this.closedByUs = true;
     clearTimeout(this.retryTimer);
     clearTimeout(this.noticeTimer);
+    clearTimeout(this.toastTimer);
+    clearInterval(this.pingTimer);
     if (this.ws?.readyState === WebSocket.OPEN) this.send("leave_room");
     this.ws?.close(1000);
     this.ws = null;
@@ -184,6 +296,9 @@ export class RoomConnection {
         this.attempt = 0;
         writeToken(payload.resume_token);
         this.set({ status: "open", me: payload.user_id });
+        this.syncClock();
+        clearInterval(this.pingTimer);
+        this.pingTimer = setInterval(() => this.syncClock(), 60_000);
         // A session resumed into this room gets room_state without asking; otherwise join.
         if (payload.room !== this.view.code) this.send("join_room", { code: this.view.code });
         break;
@@ -203,7 +318,42 @@ export class RoomConnection {
           host: payload.host,
           members: payload.members,
           chat: mergeHistory(this.view.chat, history).concat(pending),
+          media: payload.media ?? null,
+          playback: payload.playback ?? null,
+          blockers: payload.blockers ?? [],
+          locked: !!payload.locked,
+          seq: payload.seq ?? 0,
+          intent: null,
         });
+        break;
+      }
+      case "playback_update": {
+        const { seq, want, position, rate, server_time, blockers, locked, by, action, media } = payload;
+        if (seq <= this.view.seq) break; // an older update arriving late
+        this.set({
+          seq,
+          playback: { want, position, rate, server_time },
+          blockers: blockers ?? [],
+          locked: !!locked,
+          media: media ?? this.view.media,
+          lastChange: { action, by: by?.username ?? null },
+          // Any newer state from the server supersedes what we were showing optimistically.
+          intent: null,
+        });
+        break;
+      }
+      case "action_rejected": {
+        this.set({ intent: null });
+        this.showToast(rejectionText(payload.reason, payload.action, payload.by?.username));
+        break;
+      }
+      case "time_pong": {
+        const now = Date.now();
+        const rtt = now - payload.client_time;
+        if (rtt < this.bestRtt) {
+          this.bestRtt = rtt;
+          this.offset = payload.server_time - (payload.client_time + rtt / 2);
+        }
         break;
       }
       case "chat_message": {
@@ -293,6 +443,25 @@ export class RoomConnection {
   private set(patch: Partial<RoomView>) {
     this.view = { ...this.view, ...patch };
     this.listeners.forEach((fn) => fn());
+  }
+}
+
+function rejectionText(reason: string, action: string, by?: string): string {
+  switch (reason) {
+    case "race": {
+      const did = action === "play" ? "pressed play" : action === "pause" ? "paused" : "skipped";
+      return by ? `${by} ${did} first` : "Someone else got there first";
+    }
+    case "locked":
+      return "The host has locked the controls";
+    case "rate_limited":
+      return "Easy on the skipping";
+    case "no_media":
+      return "Pick a film first";
+    case "not_host":
+      return "Only the host can do that";
+    default:
+      return "That didn't go through";
   }
 }
 

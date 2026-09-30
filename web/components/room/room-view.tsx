@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
-import { FilmSlateIcon } from "@phosphor-icons/react";
+import { FilmSlateIcon, FilmStripIcon } from "@phosphor-icons/react";
 import { RoomConnection, type RoomView as View } from "@/lib/room";
 import { Projector } from "@/components/projector";
 import { Spinner } from "@/components/ui/spinner";
@@ -8,6 +8,9 @@ import { Chat } from "./chat";
 import { ChatSheet } from "./chat-sheet";
 import { RoomDialogs } from "./room-dialogs";
 import { RoomGone } from "./room-gone";
+import { Player } from "./player";
+import { FilmPicker } from "./film-picker";
+import { Button } from "@/components/ui/button";
 
 function useIsPhone() {
   return useSyncExternalStore(
@@ -25,6 +28,7 @@ export function RoomView({ code }: { code: string }) {
   const [conn] = useState(() => new RoomConnection(code));
   const view = useSyncExternalStore(conn.subscribe, conn.getSnapshot, conn.getSnapshot);
   const phone = useIsPhone();
+  const [picking, setPicking] = useState(false);
 
   useEffect(() => {
     conn.start();
@@ -35,19 +39,33 @@ export function RoomView({ code }: { code: string }) {
 
   return (
     <div className="fixed inset-0 overflow-hidden bg-ink-950">
-      {phone ? <PhoneLayout view={view} conn={conn} /> : <WideLayout view={view} conn={conn} />}
+      {phone ? (
+        <PhoneLayout view={view} conn={conn} onPick={() => setPicking(true)} />
+      ) : (
+        <WideLayout view={view} conn={conn} onPick={() => setPicking(true)} />
+      )}
+      <FilmPicker
+        open={picking}
+        onClose={() => setPicking(false)}
+        onPick={(f) => {
+          conn.setMedia(f.id);
+          setPicking(false);
+        }}
+      />
       <RoomDialogs view={view} conn={conn} />
     </div>
   );
 }
 
 // Desktop / tablet / landscape: the stage fills the room; header and chat float over it.
-function WideLayout({ view, conn }: { view: View; conn: RoomConnection }) {
+type LayoutProps = { view: View; conn: RoomConnection; onPick: () => void };
+
+function WideLayout({ view, conn, onPick }: LayoutProps) {
   return (
     <>
-      <Projector variant="stage" className="absolute inset-0">
-        <StageMessage view={view} className="absolute inset-y-0 right-[392px] left-0" />
-      </Projector>
+      <div className="absolute inset-y-0 right-[392px] left-0">
+        <Stage view={view} conn={conn} onPick={onPick} />
+      </div>
       <RoomHeader view={view} className="absolute top-3 right-[392px] left-3 z-20" />
       <aside aria-label="Chat" className="glass-thick absolute top-3 right-3 bottom-3 z-10 flex w-[368px] flex-col overflow-hidden rounded-[24px]">
         <div className="flex h-14 shrink-0 items-center justify-between px-5">
@@ -64,7 +82,7 @@ function WideLayout({ view, conn }: { view: View; conn: RoomConnection }) {
 }
 
 // Phone portrait: 16:9 stage under a floating header; chat is a sheet that drags over it.
-function PhoneLayout({ view, conn }: { view: View; conn: RoomConnection }) {
+function PhoneLayout({ view, conn, onPick }: LayoutProps) {
   const stageRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
   const [geo, setGeo] = useState({ top: 0, offset: 0 });
@@ -87,13 +105,9 @@ function PhoneLayout({ view, conn }: { view: View; conn: RoomConnection }) {
   return (
     <>
       <div ref={stageRef} className="relative aspect-video w-full pt-[env(safe-area-inset-top)]">
-        <Projector variant="stage" className="absolute inset-0">
-          <StageMessage
-            view={view}
-            compact
-            className={`absolute inset-x-0 top-[calc(56px+env(safe-area-inset-top))] bottom-0 transition-opacity duration-300 ${expanded ? "opacity-0" : ""}`}
-          />
-        </Projector>
+        <div className={`absolute inset-0 transition-opacity duration-300 ${expanded ? "opacity-40" : ""}`}>
+          <Stage view={view} conn={conn} onPick={onPick} compact />
+        </div>
       </div>
       <div ref={headerRef} className="absolute inset-x-2 top-[max(8px,env(safe-area-inset-top))] z-20">
         <RoomHeader view={view} />
@@ -107,7 +121,36 @@ function PhoneLayout({ view, conn }: { view: View; conn: RoomConnection }) {
   );
 }
 
-function StageMessage({ view, compact, className = "" }: { view: View; compact?: boolean; className?: string }) {
+// The player once a film is picked; before that, the idle screen.
+function Stage({ view, conn, onPick, compact }: LayoutProps & { compact?: boolean }) {
+  if (view.media && view.playback) {
+    return <Player key={view.media.id} view={view} conn={conn} compact={compact} onChangeFilm={onPick} />;
+  }
+  return (
+    <Projector variant="stage" className="absolute inset-0">
+      <StageMessage
+        view={view}
+        onPick={onPick}
+        compact={compact}
+        className={compact ? "absolute inset-x-0 top-[calc(56px+env(safe-area-inset-top))] bottom-0" : "absolute inset-0"}
+      />
+    </Projector>
+  );
+}
+
+function StageMessage({
+  view,
+  onPick,
+  compact,
+  className = "",
+}: {
+  view: View;
+  onPick: () => void;
+  compact?: boolean;
+  className?: string;
+}) {
+  const isHost = view.me === view.host;
+  const host = view.members.find((m) => m.user_id === view.host)?.username;
   return (
     <div className={`flex items-center justify-center p-6 ${className}`}>
       {view.joined ? (
@@ -118,11 +161,17 @@ function StageMessage({ view, compact, className = "" }: { view: View; compact?:
             </span>
           )}
           <p className={`font-semibold tracking-[-0.02em] text-fog-50 ${compact ? "text-[17px]" : "text-2xl"}`}>
-            The screen&rsquo;s warming up
+            {isHost ? "What are we watching?" : "The screen\u2019s warming up"}
           </p>
-          <p className={`leading-relaxed text-fog-300/80 ${compact ? "text-[13px]" : "text-[15px]"}`}>
-            Picking a film arrives in the next update. The chat&rsquo;s open in the meantime.
-          </p>
+          {isHost ? (
+            <Button size={compact ? "md" : "lg"} onClick={onPick} className={compact ? "mt-1" : "mt-2"}>
+              <FilmStripIcon size={20} weight="bold" /> Pick a film
+            </Button>
+          ) : (
+            <p className={`leading-relaxed text-fog-300/80 ${compact ? "text-[13px]" : "text-[15px]"}`}>
+              Waiting for {host ?? "the host"} to pick a film. The chat&rsquo;s open in the meantime.
+            </p>
+          )}
         </div>
       ) : (
         <p key="finding" className="enter inline-flex items-center gap-2.5 text-[15px] font-medium text-fog-300">

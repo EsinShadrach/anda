@@ -34,7 +34,7 @@ func newEnv(t *testing.T) *env {
 	t.Cleanup(func() { db.Close() })
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	a := auth.New(db, db, auth.Config{}, log)
-	rm := rooms.NewManager(db, db, log)
+	rm := rooms.NewManager(db, db, fakeMedia{}, log)
 	mux := http.NewServeMux()
 	a.Register(mux)
 	(&rooms.Handlers{Manager: rm, Users: db, Authenticate: a.UserFromRequest, Log: log}).Register(mux)

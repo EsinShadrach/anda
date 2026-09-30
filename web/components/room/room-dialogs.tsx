@@ -52,7 +52,7 @@ function Dialog({
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0, transition: { duration: 0.15 } }}
-      className="fixed inset-0 z-50 grid place-items-center bg-ink-950/60 p-4 backdrop-blur-[2px]"
+      className="fixed inset-0 z-50 grid place-items-center bg-ink-950/60 p-4 backdrop-blur-sm"
     >
       <motion.div
         role="alertdialog"

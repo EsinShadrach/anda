@@ -257,6 +257,25 @@ func (g *Gateway) readLoop(ctx context.Context, c *conn, sess *session) {
 			}
 			g.rooms.Chat(code, c.user.ID, c, p)
 
+		case protocol.TypeTimePing:
+			var p protocol.TimePing
+			if decode(c, env, &p) {
+				c.Send(protocol.Encode(protocol.TypeTimePong, protocol.TimePong{ClientTime: p.ClientTime, ServerTime: protocol.UnixMs(time.Now())}))
+			}
+
+		case protocol.TypePlay, protocol.TypePause, protocol.TypeSeek, protocol.TypeSetMedia,
+			protocol.TypeBufferReport, protocol.TypeSkipWait, protocol.TypeLockControls:
+			msg, ok := decodePlayback(c, env)
+			if !ok {
+				continue
+			}
+			code := g.roomOf(sess)
+			if code == "" {
+				c.Send(protocol.EncodeError(protocol.ErrNotInRoom, "Join the room first."))
+				continue
+			}
+			g.rooms.Playback(code, c.user.ID, c, msg)
+
 		default:
 			c.Send(protocol.EncodeError(protocol.ErrBadMessage, "Unknown message type "+env.Type+"."))
 		}
@@ -332,6 +351,33 @@ func decode(c *conn, env protocol.Envelope, v any) bool {
 		return false
 	}
 	return true
+}
+
+// decodePlayback turns a playback envelope into its typed payload.
+func decodePlayback(c *conn, env protocol.Envelope) (any, bool) {
+	switch env.Type {
+	case protocol.TypePlay:
+		return decodeAs[protocol.Play](c, env)
+	case protocol.TypePause:
+		return decodeAs[protocol.Pause](c, env)
+	case protocol.TypeSeek:
+		return decodeAs[protocol.Seek](c, env)
+	case protocol.TypeSetMedia:
+		return decodeAs[protocol.SetMedia](c, env)
+	case protocol.TypeBufferReport:
+		return decodeAs[protocol.BufferReport](c, env)
+	case protocol.TypeSkipWait:
+		return decodeAs[protocol.SkipWait](c, env)
+	case protocol.TypeLockControls:
+		return decodeAs[protocol.LockControls](c, env)
+	}
+	return nil, false
+}
+
+func decodeAs[T any](c *conn, env protocol.Envelope) (any, bool) {
+	var p T
+	ok := decode(c, env, &p)
+	return p, ok
 }
 
 func newToken() string {

@@ -36,6 +36,13 @@ type member struct {
 
 	chatTokens float64
 	chatAt     time.Time
+
+	seekTokens   float64
+	seekAt       time.Time
+	reportTokens float64
+	reportAt     time.Time
+	stallSince   time.Time // zero unless currently stalling
+	skipUntil    time.Time // host said "don't wait" for them
 }
 
 // Room is one live room. All state is owned by its goroutine; everything else talks to it
@@ -51,6 +58,7 @@ type Room struct {
 	host     int64
 	chat     []protocol.ChatMessage
 	lastSave time.Time
+	pb       playback
 }
 
 func newRoom(m *Manager, info store.Room, history []store.ChatMessage) *Room {
@@ -60,6 +68,7 @@ func newRoom(m *Manager, info store.Room, history []store.ChatMessage) *Room {
 		inbox:   make(chan func()), // unbuffered: an accepted event is always processed
 		done:    make(chan struct{}),
 		members: make(map[int64]*member),
+		pb:      newPlayback(),
 	}
 	for _, c := range history {
 		r.chat = append(r.chat, toProtoChat(c, ""))
@@ -111,7 +120,10 @@ func (r *Room) join(u protocol.User, s Sender) {
 		}
 	} else {
 		r.joinSeq++
-		mem = &member{user: u, sender: s, status: protocol.StatusOnline, joinedAt: r.joinSeq, chatTokens: chatBurst, chatAt: time.Now()}
+		now := time.Now()
+		mem = &member{user: u, sender: s, status: protocol.StatusOnline, joinedAt: r.joinSeq,
+			chatTokens: chatBurst, chatAt: now, seekTokens: seekBurst, seekAt: now,
+			reportTokens: reportBurst, reportAt: now}
 		r.members[u.ID] = mem
 		if r.host == 0 {
 			r.host = u.ID
@@ -134,6 +146,7 @@ func (r *Room) detach(userID int64, s Sender) {
 	mem.epoch++
 	epoch := mem.epoch
 	r.broadcast(protocol.TypeMemberUpdate, protocol.MemberUpdate{UserID: userID, Username: mem.user.Username, Status: mem.status})
+	r.dropBlocker(userID) // the room doesn't wait for people who aren't there
 	time.AfterFunc(r.m.awayGrace, func() {
 		r.do(func() {
 			if mem, ok := r.members[userID]; ok && mem.epoch == epoch {
@@ -148,6 +161,7 @@ func (r *Room) leave(userID int64) {
 	if !ok {
 		return
 	}
+	r.dropBlocker(userID)
 	delete(r.members, userID)
 	r.broadcast(protocol.TypeMemberUpdate, protocol.MemberUpdate{UserID: userID, Username: mem.user.Username, Status: protocol.StatusLeft})
 	if r.host == userID {
@@ -221,7 +235,8 @@ func (r *Room) snapshot() protocol.RoomState {
 	}
 	return protocol.RoomState{
 		Code: r.info.Code, Host: r.host, Members: members,
-		Media: nullJSON, Playback: nullJSON, Blockers: []string{}, Chat: chat,
+		Media: r.pb.media, Playback: r.pb.state(time.Now()), Blockers: r.blockerList(),
+		Locked: r.pb.locked, Seq: r.pb.seq, Chat: chat,
 	}
 }
 
@@ -260,8 +275,6 @@ func (r *Room) touch() {
 		r.m.log.Warn("touch room", "room", r.info.Code, "err", err)
 	}
 }
-
-var nullJSON = []byte("null")
 
 func toProtoChat(c store.ChatMessage, clientMsgID string) protocol.ChatMessage {
 	return protocol.ChatMessage{

@@ -24,9 +24,16 @@ const (
 
 var ErrNotFound = errors.New("rooms: room not found")
 
+// MediaInfo resolves films for set_media (media.Service in production).
+type MediaInfo interface {
+	Info(ctx context.Context, id int64) (protocol.Media, error)
+	Touch(ctx context.Context, id int64)
+}
+
 type Manager struct {
 	rooms store.Rooms
 	chat  store.Chat
+	media MediaInfo
 	log   *slog.Logger
 
 	// awayGrace is how long a disconnected member stays in the room before leaving.
@@ -38,10 +45,11 @@ type Manager struct {
 	live map[string]*Room
 }
 
-func NewManager(rooms store.Rooms, chat store.Chat, log *slog.Logger) *Manager {
+func NewManager(rooms store.Rooms, chat store.Chat, media MediaInfo, log *slog.Logger) *Manager {
 	return &Manager{
 		rooms:       rooms,
 		chat:        chat,
+		media:       media,
 		log:         log,
 		awayGrace:   60 * time.Second,
 		idleTimeout: 5 * time.Minute,
@@ -113,6 +121,34 @@ func (m *Manager) Leave(code string, userID int64) {
 func (m *Manager) Chat(code string, userID int64, s Sender, msg protocol.ChatSend) {
 	r := m.get(code)
 	if r == nil || !r.do(func() { r.sendChat(userID, s, msg) }) {
+		s.Send(protocol.EncodeError(protocol.ErrNotInRoom, "Join the room first."))
+	}
+}
+
+// Playback applies a playback message (play, pause, seek, set_media, buffer_report,
+// skip_wait, lock_controls) from userID in the room with code. The payload is already
+// decoded into the matching protocol type.
+func (m *Manager) Playback(code string, userID int64, s Sender, msg any) {
+	r := m.get(code)
+	ok := r != nil && r.do(func() {
+		switch p := msg.(type) {
+		case protocol.Play:
+			r.play(userID, s, p)
+		case protocol.Seek:
+			r.seek(userID, s, p)
+		case protocol.Pause:
+			r.pause(userID, s, p)
+		case protocol.SetMedia:
+			r.setMedia(userID, s, p)
+		case protocol.BufferReport:
+			r.bufferReport(userID, p)
+		case protocol.SkipWait:
+			r.skipWait(userID, s, p)
+		case protocol.LockControls:
+			r.lockControls(userID, s, p)
+		}
+	})
+	if !ok {
 		s.Send(protocol.EncodeError(protocol.ErrNotInRoom, "Join the room first."))
 	}
 }

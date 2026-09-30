@@ -73,3 +73,21 @@ type Chat interface {
 	// RecentChatMessages returns up to limit messages, oldest first.
 	RecentChatMessages(ctx context.Context, roomID int64, limit int) ([]ChatMessage, error)
 }
+
+type Media struct {
+	ID            int64
+	Title         string
+	SizeBytes     int64
+	Status        string // downloading | ready
+	Path          string // relative to the media directory
+	LastWatchedAt time.Time
+}
+
+type MediaStore interface {
+	// UpsertLocalMedia registers a ready file found on disk, keyed by its path.
+	UpsertLocalMedia(ctx context.Context, title, path string, size int64) (Media, error)
+	MediaByID(ctx context.Context, id int64) (Media, error)
+	// ReadyMedia lists ready films, most recently watched first.
+	ReadyMedia(ctx context.Context) ([]Media, error)
+	TouchMedia(ctx context.Context, id int64, at time.Time) error
+}

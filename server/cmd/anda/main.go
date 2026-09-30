@@ -15,6 +15,7 @@ import (
 
 	"anda/internal/auth"
 	"anda/internal/gateway"
+	"anda/internal/media"
 	"anda/internal/rooms"
 	"anda/internal/store"
 )
@@ -49,7 +50,11 @@ func run(log *slog.Logger) error {
 	}, log)
 	go authSvc.RunJanitor(ctx)
 
-	roomMgr := rooms.NewManager(db, db, log)
+	films := &media.Service{Dir: env("ANDA_MEDIA", filepath.Join(filepath.Dir(dbPath), "media")), Store: db, Authenticate: authSvc.UserFromRequest, Log: log}
+	if err := films.Scan(ctx); err != nil {
+		return err
+	}
+	roomMgr := rooms.NewManager(db, db, films, log)
 	// Extra WebSocket origins, e.g. "localhost:3000" for the Next dev server.
 	var origins []string
 	if v := os.Getenv("ANDA_WS_ORIGINS"); v != "" {
@@ -61,6 +66,7 @@ func run(log *slog.Logger) error {
 	authSvc.Register(mux)
 	(&rooms.Handlers{Manager: roomMgr, Users: db, Authenticate: authSvc.UserFromRequest, Log: log}).Register(mux)
 	gw.Register(mux)
+	films.Register(mux)
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		if err := db.Ping(r.Context()); err != nil {
 			http.Error(w, "db unavailable", http.StatusServiceUnavailable)

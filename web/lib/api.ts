@@ -54,3 +54,9 @@ export function cleanCode(input: string): string {
     .join("")
     .slice(0, 6);
 }
+
+export type Film = { id: number; title: string; url: string; size_bytes: number; last_watched_at?: number };
+
+export const library = {
+  ready: () => request<{ films: Film[] }>("GET", "/api/library/ready").then((r) => r.films),
+};

@@ -24,6 +24,15 @@ const (
 	TypeJoinRoom  = "join_room"
 	TypeLeaveRoom = "leave_room"
 	TypeChatSend  = "chat_send"
+
+	TypePlay         = "play"
+	TypePause        = "pause"
+	TypeSeek         = "seek"
+	TypeSetMedia     = "set_media"
+	TypeBufferReport = "buffer_report"
+	TypeTimePing     = "time_ping"
+	TypeSkipWait     = "skip_wait"
+	TypeLockControls = "lock_controls"
 )
 
 // Server → browser.
@@ -36,6 +45,10 @@ const (
 	TypeReplaced       = "replaced"
 	TypeReconnectLater = "reconnect_later"
 	TypeError          = "error"
+
+	TypePlaybackUpdate = "playback_update"
+	TypeActionRejected = "action_rejected"
+	TypeTimePong       = "time_pong"
 )
 
 type Hello struct {
@@ -89,18 +102,111 @@ type User struct {
 	Username string `json:"username"`
 }
 
-// RoomState is the full snapshot sent on join or resume. Media, playback and blockers
-// arrive with synced playback (step 3); they're present now so the shape doesn't change.
+// RoomState is the full snapshot sent on join or resume.
 type RoomState struct {
-	Code     string          `json:"code"`
-	Host     int64           `json:"host"`
-	Members  []Member        `json:"members"`
-	Media    json.RawMessage `json:"media"`
-	Playback json.RawMessage `json:"playback"`
-	Blockers []string        `json:"blockers"`
-	Locked   bool            `json:"locked"`
-	Seq      int64           `json:"seq"`
-	Chat     []ChatMessage   `json:"chat"`
+	Code     string         `json:"code"`
+	Host     int64          `json:"host"`
+	Members  []Member       `json:"members"`
+	Media    *Media         `json:"media"`    // nil until the host picks a film
+	Playback *PlaybackState `json:"playback"` // nil until the host picks a film
+	Blockers []Blocker      `json:"blockers"`
+	Locked   bool           `json:"locked"`
+	Seq      int64          `json:"seq"`
+	Chat     []ChatMessage  `json:"chat"`
+}
+
+type Media struct {
+	ID    int64  `json:"id"`
+	Title string `json:"title"`
+	URL   string `json:"url"`
+}
+
+// PlaybackState anchors the room clock: at ServerTime the film was at Position. While the
+// room is actually running (people want it playing and nothing blocks), clients compute
+// now's position as Position + (serverNow - ServerTime) * Rate.
+type PlaybackState struct {
+	Want       string  `json:"want"` // playing | paused: what people asked for
+	Position   float64 `json:"position"`
+	Rate       float64 `json:"rate"`
+	ServerTime int64   `json:"server_time"` // unix ms
+}
+
+// Want values.
+const (
+	WantPlaying = "playing"
+	WantPaused  = "paused"
+)
+
+// Blocker is something the room is waiting on; it only plays when there are none.
+type Blocker struct {
+	UserID   int64  `json:"user_id"`
+	Username string `json:"username"`
+	Reason   string `json:"reason"` // buffering | getting_ready
+}
+
+const (
+	BlockBuffering    = "buffering"
+	BlockGettingReady = "getting_ready"
+)
+
+// Play, Pause and Seek carry the last sequence number the client saw, so the server can
+// tell a stale click from a considered one.
+type Play struct {
+	LastSeq  int64   `json:"last_seq"`
+	Position float64 `json:"position"`
+}
+
+type Pause struct {
+	LastSeq  int64   `json:"last_seq"`
+	Position float64 `json:"position"`
+}
+
+type Seek struct {
+	LastSeq  int64   `json:"last_seq"`
+	Position float64 `json:"position"` // target
+}
+
+type SetMedia struct {
+	StreamID int64 `json:"stream_id"`
+}
+
+type BufferReport struct {
+	Ahead    float64 `json:"ahead"` // seconds buffered past the playhead
+	Stalling bool    `json:"stalling"`
+	Quality  string  `json:"quality,omitempty"`
+}
+
+type TimePing struct {
+	ClientTime int64 `json:"client_time"`
+}
+
+type TimePong struct {
+	ClientTime int64 `json:"client_time"`
+	ServerTime int64 `json:"server_time"`
+}
+
+type SkipWait struct {
+	UserID int64 `json:"user_id"`
+}
+
+type LockControls struct {
+	Locked bool `json:"locked"`
+}
+
+type PlaybackUpdate struct {
+	Seq int64 `json:"seq"`
+	PlaybackState
+	Blockers []Blocker `json:"blockers"`
+	Locked   bool      `json:"locked"`
+	By       *User     `json:"by,omitempty"` // nil for changes nobody made (e.g. a buffer filled)
+	Action   string    `json:"action"`       // play | pause | seek | set_media | blockers | skip_wait | lock
+	Media    *Media    `json:"media,omitempty"`
+}
+
+type ActionRejected struct {
+	Reason string `json:"reason"` // race | locked | rate_limited | no_media | not_host
+	Action string `json:"action"` // the action that won (race) or was refused
+	By     *User  `json:"by,omitempty"`
 }
 
 type MemberUpdate struct {

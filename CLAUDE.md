@@ -2,15 +2,15 @@
 
 A watch-party web app: sign in, join a room, chat, and watch a film in sync. The full plan (build order, WebSocket protocol, "done when" per step) is the Claude Doc "Anda — Watch Party App Plan": https://claude.ai/artifact/HTWvaFVXutdVXcTuJTzwPY. Read it with the docs tools before starting a step.
 
-**Status:** steps 1 (auth) and 2 (rooms, chat, presence over WebSockets) are done and deployed. Next is step 3 (synced playback with a static MP4).
+**Status:** steps 1 (auth), 2 (rooms, chat, presence) and 3 (synced playback) are done and deployed. Next is step 4 (HLS remuxing with ffmpeg). Films live in the `anda_data` volume under `/data/media` and are registered at API startup (drop a file in, restart `api`); Big Buck Bunny (640x360 H.264/AAC, from download.blender.org) is there now.
 
 **Pulse is stopped** (since 2026-09-30, at the user's request, so Anda has the VM). `docker compose stop` kept its containers and volumes; `cd ~/pulse && docker compose start` brings it back. Don't restart it unless asked.
 
 **UI:** "Screening room" direction: warm near-black, one ember accent, Geist + Geist Mono, a full-bleed stage with translucent glass chrome over it, and on phones chat is a sheet dragged over the film. Before any UI work load `frontend-dev` (visual rules and quality gates) and `apple-design` (materials, springs, gestures), plus `emil-design-eng` / `mobile-native` for polish and phone mechanics. Stack: Tailwind v4 (tokens in `web/app/globals.css` `@theme`), Motion, Phosphor icons (use the `*Icon` names; the bare ones are deprecated). Components live in `web/components/` (`ui/`, `home/`, `room/`, `projector.tsx`).
 
-**Stack:** Go API in `server/` (`net/http`, SQLite via `modernc.org/sqlite`, goose migrations embedded from `server/migrations`, argon2id, `coder/websocket`), Next.js static export in `web/`. Server packages: `auth`, `rooms` (one goroutine per room), `gateway` (sockets, resume, replaced), `protocol` (message types, names exactly as in the plan), `store`, `httpx`. Rooms are at `/room?code=XXXXXX` (query string because the export is static).
+**Stack:** Go API in `server/` (`net/http`, SQLite via `modernc.org/sqlite`, goose migrations embedded from `server/migrations`, argon2id, `coder/websocket`), Next.js static export in `web/`. Server packages: `auth`, `rooms` (one goroutine per room; `playback.go` is the want-vs-blockers state machine), `gateway` (sockets, resume, replaced, time_ping), `media` (scan, ready shelf, range streaming), `protocol` (message types, names exactly as in the plan), `store`, `httpx`. Client sync lives in `web/lib/player-sync.ts`. Rooms are at `/room?code=XXXXXX` (query string because the export is static).
 
-**Local dev:** run the API with `ANDA_WS_ORIGINS=localhost:3000 go run ./cmd/anda` in `server/`, and `npm run dev` in `web/` (it proxies `/api` to :8080; the socket goes straight to `ws://localhost:8080/ws`). Fast Refresh remounts rooms in every open tab, so with two tabs open they can replace each other in dev only. Ask before adding dependencies the plan doesn't list.
+**Local dev:** run the API with `ANDA_WS_ORIGINS=localhost:3000 go run ./cmd/anda` in `server/`, and `npm run dev` in `web/` (it proxies `/api` to :8080; the socket goes straight to `ws://localhost:8080/ws`). Fast Refresh remounts rooms in every open tab, so with two tabs open they can replace each other in dev only. To test two users in one browser, use `localhost:3000` and `127.0.0.1:3000` (separate cookie jars; both are allowed dev origins; start the API with `ANDA_WS_ORIGINS=localhost:3000,127.0.0.1:3000` and `ANDA_MEDIA=<dir with an .mp4>`). Keep both visible (split panes): browsers pause video in hidden tabs. Ask before adding dependencies the plan doesn't list.
 
 **The plan assumes a VM of its own; this one is shared with Pulse.** Its memory table (Stremio server 200–400 MB, ffmpeg, "add swap") doesn't fit here. Steps 1–3 fit; steps 4–5 (ffmpeg remux, Stremio's streaming server) need a decision with the user before they're built.
 
@@ -41,7 +41,7 @@ Caddy (`proxy/`) is the only container that publishes ports (80/443). Projects j
 
 | URL | Goes to |
 |---|---|
-| https://anda.102-211-122-78.sslip.io | Anda: `/api/*` and `/ws` → `anda-api:8080`, everything else → `anda-web:80` |
+| https://anda.102-211-122-78.sslip.io | Anda: `/api/*`, `/ws` and `/media/*` → `anda-api:8080`, everything else → `anda-web:80` |
 | https://pulse.102-211-122-78.sslip.io | Pulse |
 | http://102.211.122.78 (bare IP, also `localhost` on the VM) | Pulse. Keep it that way; Pulse's k6/bench scripts depend on it |
 
