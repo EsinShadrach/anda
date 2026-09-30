@@ -31,8 +31,8 @@ func TestClassify(t *testing.T) {
 		{mk("Film.2019.1080p.WEBRip.x264.AAC-GROUP\n👤 42 💾 1.9 GB", "", 0), "", "1080p", 2040109465, 42},
 		{mk("Film.2019.1080p.BluRay.x265.10bit", "", 0), "video", "1080p", 0, 0},
 		{mk("Film.2019.2160p.HDR.HEVC", "", 0), "video", "2160p", 0, 0},
-		{mk("Film.2019.720p.WEB-DL.DDP5.1.H264", "", 0), "audio", "720p", 0, 0},
-		{mk("Film.2019.1080p.BluRay.DTS.x264", "", 0), "audio", "1080p", 0, 0},
+		{mk("Film.2019.720p.WEB-DL.DDP5.1.H264", "", 0), "", "720p", 0, 0}, // audio gets converted
+		{mk("Film.2019.1080p.BluRay.DTS.x264", "", 0), "", "1080p", 0, 0},
 		{mk("Film (2019) [1080p] [YTS.MX]\n💾 12 GB", "", 0), "size", "1080p", 12 << 30, 0},
 		{mk("Tears of Steel", "Tears of Steel.webm", 571346576), "video", "", 571346576, 0},
 		{mk("Sintel", "Sintel.mp4", 129241752), "", "", 129241752, 0},

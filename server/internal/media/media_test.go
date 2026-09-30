@@ -9,12 +9,25 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 
 	"anda/internal/store"
 )
+
+func TestCodecArgs(t *testing.T) {
+	if got := strings.Join(codecArgs(probe{AudioCodec: "aac"}), " "); got != "-c copy" {
+		t.Errorf("aac: %s", got)
+	}
+	if got := strings.Join(codecArgs(probe{}), " "); got != "-c copy" {
+		t.Errorf("no audio: %s", got)
+	}
+	if got := strings.Join(codecArgs(probe{AudioCodec: "truehd"}), " "); !strings.Contains(got, "-c:v copy") || !strings.Contains(got, "-c:a aac") {
+		t.Errorf("truehd: %s", got)
+	}
+}
 
 func TestCompatible(t *testing.T) {
 	cases := []struct {
@@ -25,8 +38,8 @@ func TestCompatible(t *testing.T) {
 		{probe{VideoCodec: "h264", Profile: "Main", PixFmt: "yuv420p"}, true}, // no audio is fine
 		{probe{VideoCodec: "hevc", PixFmt: "yuv420p", AudioCodec: "aac"}, false},
 		{probe{VideoCodec: "h264", Profile: "High 10", PixFmt: "yuv420p10le", AudioCodec: "aac"}, false},
-		{probe{VideoCodec: "h264", Profile: "High", PixFmt: "yuv420p", AudioCodec: "ac3"}, false},
-		{probe{VideoCodec: "h264", Profile: "High", PixFmt: "yuv420p", AudioCodec: "dts"}, false},
+		{probe{VideoCodec: "h264", Profile: "High", PixFmt: "yuv420p", AudioCodec: "ac3"}, true}, // audio gets converted
+		{probe{VideoCodec: "h264", Profile: "High", PixFmt: "yuv420p", AudioCodec: "dts"}, true},
 		{probe{AudioCodec: "aac"}, false},
 	}
 	for _, c := range cases {
@@ -51,12 +64,16 @@ func TestPrepareAndServe(t *testing.T) {
 		args := append([]string{"-hide_banner", "-loglevel", "error",
 			"-f", "lavfi", "-i", "testsrc=size=160x90:rate=24:duration=8",
 			"-f", "lavfi", "-i", "sine=frequency=440:duration=8"}, vcodec...)
-		args = append(args, "-c:a", "aac", "-pix_fmt", "yuv420p", "-shortest", filepath.Join(mediaDir, name))
+		if !slices.Contains(vcodec, "-c:a") {
+			args = append(args, "-c:a", "aac")
+		}
+		args = append(args, "-pix_fmt", "yuv420p", "-shortest", filepath.Join(mediaDir, name))
 		if out, err := exec.Command("ffmpeg", args...).CombinedOutput(); err != nil {
 			t.Fatalf("make %s: %v %s", name, err, out)
 		}
 	}
 	clip("Good Film.mp4", "-c:v", "libx264", "-g", "48")
+	clip("Surround Film.mkv", "-c:v", "libx264", "-g", "48", "-c:a", "ac3")
 	clip("Old Codec.mp4", "-c:v", "mpeg4")
 
 	db, err := store.OpenSQLite(context.Background(), filepath.Join(dir, "anda.db"))
@@ -74,7 +91,7 @@ func TestPrepareAndServe(t *testing.T) {
 		t.Fatal(err)
 	}
 	pending, err := db.MediaNeedingHLS(ctx)
-	if err != nil || len(pending) != 2 {
+	if err != nil || len(pending) != 3 {
 		t.Fatalf("pending: %v %v", len(pending), err)
 	}
 	for _, m := range pending {
@@ -82,8 +99,22 @@ func TestPrepareAndServe(t *testing.T) {
 	}
 
 	ready, _ := db.ReadyMedia(ctx)
-	if len(ready) != 1 || ready[0].Title != "Good Film" || ready[0].Duration < 7.5 || ready[0].VideoCodec != "h264" {
+	byTitle := map[string]store.Media{}
+	for _, m := range ready {
+		byTitle[m.Title] = m
+	}
+	if len(ready) != 2 || byTitle["Good Film"].Duration < 7.5 || byTitle["Good Film"].VideoCodec != "h264" {
 		t.Fatalf("ready shelf: %+v", ready)
+	}
+	// AC3 audio was converted to AAC; the video was copied.
+	surround := byTitle["Surround Film"]
+	if surround.AudioCodec != "ac3" {
+		t.Fatalf("surround probe: %+v", surround)
+	}
+	out, err := exec.Command("ffprobe", "-v", "error", "-show_entries", "stream=codec_name", "-of", "csv=p=0",
+		filepath.Join(s.hlsDir(surround.ID), "init.mp4")).Output()
+	if err != nil || !strings.Contains(string(out), "aac") || !strings.Contains(string(out), "h264") {
+		t.Fatalf("surround HLS codecs: %q %v", out, err)
 	}
 	for _, m := range pending {
 		got, _ := db.MediaByID(ctx, m.ID)
@@ -91,14 +122,14 @@ func TestPrepareAndServe(t *testing.T) {
 			t.Fatalf("old codec: %+v", got)
 		}
 	}
-	good := ready[0]
+	good := byTitle["Good Film"]
 	if _, err := s.Info(ctx, good.ID); err != nil {
 		t.Fatalf("info: %v", err)
 	}
 
 	// A rescan with nothing changed leaves the film ready.
 	s.scan(ctx)
-	if again, _ := db.ReadyMedia(ctx); len(again) != 1 {
+	if again, _ := db.ReadyMedia(ctx); len(again) != 2 {
 		t.Fatal("rescan un-readied the film")
 	}
 

@@ -43,6 +43,9 @@ type member struct {
 	reportAt     time.Time
 	stallSince   time.Time // zero unless currently stalling
 	skipUntil    time.Time // host said "don't wait" for them
+
+	lastAction time.Time // last thing they did themselves (not automatic reports)
+	askedAt    time.Time // when "Still watching?" was sent; zero if not waiting on an answer
 }
 
 // Room is one live room. All state is owned by its goroutine; everything else talks to it
@@ -90,13 +93,14 @@ func (r *Room) do(f func()) bool {
 func (r *Room) run() {
 	idle := time.NewTimer(r.m.idleTimeout)
 	defer idle.Stop()
+	tick := time.NewTicker(r.m.TickEvery)
+	defer tick.Stop()
 	for {
 		select {
 		case f := <-r.inbox:
 			f()
 			if r.ended {
-				r.m.remove(r)
-				close(r.done)
+				r.shutdown()
 				return
 			}
 			if len(r.members) == 0 {
@@ -104,13 +108,29 @@ func (r *Room) run() {
 			} else {
 				idle.Stop()
 			}
+		case now := <-tick.C:
+			r.tick(now)
 		case <-idle.C:
 			if len(r.members) == 0 {
-				r.m.remove(r)
-				close(r.done)
+				r.shutdown()
 				return
 			}
 		}
+	}
+}
+
+// shutdown removes the room and lets go of its film (a download nobody else is watching
+// can stop: plan, "Empty room: clean up ... including any running transcode or torrent").
+func (r *Room) shutdown() {
+	r.m.remove(r)
+	close(r.done)
+	if r.pb.media != nil {
+		id := r.pb.media.ID
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			r.m.media.Release(ctx, id)
+		}()
 	}
 }
 
@@ -120,6 +140,7 @@ func (r *Room) join(u protocol.User, s Sender) {
 	if ok {
 		mem.sender = s
 		mem.epoch++
+		mem.lastAction, mem.askedAt = time.Now(), time.Time{} // coming back counts as being here
 		if mem.status != protocol.StatusOnline {
 			mem.status = protocol.StatusOnline
 			r.broadcastExcept(s, protocol.TypeMemberUpdate, protocol.MemberUpdate{UserID: u.ID, Username: u.Username, Status: mem.status})
@@ -129,7 +150,7 @@ func (r *Room) join(u protocol.User, s Sender) {
 		now := time.Now()
 		mem = &member{user: u, sender: s, status: protocol.StatusOnline, joinedAt: r.joinSeq,
 			chatTokens: chatBurst, chatAt: now, seekTokens: seekBurst, seekAt: now,
-			reportTokens: reportBurst, reportAt: now}
+			reportTokens: reportBurst, reportAt: now, lastAction: now}
 		r.members[u.ID] = mem
 		if r.host == 0 {
 			r.host = u.ID
@@ -153,6 +174,7 @@ func (r *Room) detach(userID int64, s Sender) {
 	epoch := mem.epoch
 	r.broadcast(protocol.TypeMemberUpdate, protocol.MemberUpdate{UserID: userID, Username: mem.user.Username, Status: mem.status})
 	r.dropBlocker(userID) // the room doesn't wait for people who aren't there
+	r.pauseIfAllAway()
 	time.AfterFunc(r.m.awayGrace, func() {
 		r.do(func() {
 			if mem, ok := r.members[userID]; ok && mem.epoch == epoch {
@@ -171,10 +193,15 @@ func (r *Room) leave(userID int64) {
 	delete(r.members, userID)
 	r.broadcast(protocol.TypeMemberUpdate, protocol.MemberUpdate{UserID: userID, Username: mem.user.Username, Status: protocol.StatusLeft})
 	if r.host == userID {
+		// The host had the away grace to come back; now hand over to whoever has been here
+		// longest, preferring someone who's actually online.
 		r.host = 0
 		var first *member
 		for _, m := range r.members {
-			if first == nil || m.joinedAt < first.joinedAt {
+			better := first == nil ||
+				(m.status == protocol.StatusOnline && first.status != protocol.StatusOnline) ||
+				(m.status == first.status && m.joinedAt < first.joinedAt)
+			if better {
 				first = m
 			}
 		}
@@ -183,6 +210,7 @@ func (r *Room) leave(userID int64) {
 			r.broadcast(protocol.TypeHostChanged, protocol.HostChanged{Host: r.host})
 		}
 	}
+	r.pauseIfAllAway()
 }
 
 // end tells everyone the room is over and empties it. The room is already deleted.
@@ -211,6 +239,7 @@ func (r *Room) sendChat(userID int64, s Sender, in protocol.ChatSend) {
 		return
 	}
 	mem.chatTokens--
+	r.active(mem)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

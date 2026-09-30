@@ -33,6 +33,8 @@ const (
 	TypeTimePing     = "time_ping"
 	TypeSkipWait     = "skip_wait"
 	TypeLockControls = "lock_controls"
+	TypeStillHere    = "still_here"
+	TypeHostTransfer = "host_transfer"
 )
 
 // Server → browser.
@@ -50,6 +52,7 @@ const (
 	TypePlaybackUpdate = "playback_update"
 	TypeActionRejected = "action_rejected"
 	TypeTimePong       = "time_pong"
+	TypeStillThere     = "still_there"
 )
 
 type Hello struct {
@@ -123,6 +126,9 @@ type Media struct {
 	Duration float64 `json:"duration,omitempty"` // seconds
 	Poster   string  `json:"poster,omitempty"`
 	Year     string  `json:"year,omitempty"`
+	// CatalogID links a Library film to its catalog entry, so the host can switch to
+	// another release of the same film.
+	CatalogID string `json:"catalog_id,omitempty"`
 	// State is "preparing" while a torrent film is still downloading (its playlist grows;
 	// poll /api/media/{id}/progress), "ready" once complete.
 	State string `json:"state"`
@@ -175,6 +181,13 @@ type Seek struct {
 
 type SetMedia struct {
 	StreamID int64 `json:"stream_id"`
+	// Position, when set, switches release mid-film: the room carries on from here (and
+	// keeps playing if it was) instead of starting the new film from the top, paused.
+	Position float64 `json:"position,omitempty"`
+}
+
+type HostTransfer struct {
+	UserID int64 `json:"user_id"`
 }
 
 type BufferReport struct {
@@ -206,7 +219,7 @@ type PlaybackUpdate struct {
 	Blockers []Blocker `json:"blockers"`
 	Locked   bool      `json:"locked"`
 	By       *User     `json:"by,omitempty"` // nil for changes nobody made (e.g. a buffer filled)
-	Action   string    `json:"action"`       // play | pause | seek | set_media | blockers | skip_wait | lock
+	Action   string    `json:"action"`       // play | pause | seek | set_media | switch | blockers | skip_wait | lock | ended | all_away
 	Media    *Media    `json:"media,omitempty"`
 }
 

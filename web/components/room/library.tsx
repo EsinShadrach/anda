@@ -305,7 +305,7 @@ function FilmView({
               <p className="font-semibold text-fog-100">No streams this server can play</p>
               <p className="mt-1 text-fog-500">
                 {hiddenCount > 0
-                  ? `${hiddenCount} found, but they need transcoding (HEVC, 10-bit, DTS or AC3 audio) or are over 4 GB.`
+                  ? `${hiddenCount} found, but they need video transcoding (HEVC, 10-bit, WebM) or are over 4 GB.`
                   : data.failed?.length
                     ? `${data.failed.join(" and ")} didn't answer, so there's nothing to show yet.`
                     : "None of the configured sources have this film."}

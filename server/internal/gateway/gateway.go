@@ -268,7 +268,8 @@ func (g *Gateway) readLoop(ctx context.Context, c *conn, sess *session) {
 			}
 
 		case protocol.TypePlay, protocol.TypePause, protocol.TypeSeek, protocol.TypeSetMedia,
-			protocol.TypeBufferReport, protocol.TypeSkipWait, protocol.TypeLockControls:
+			protocol.TypeBufferReport, protocol.TypeSkipWait, protocol.TypeLockControls,
+			protocol.TypeHostTransfer, protocol.TypeStillHere:
 			msg, ok := decodePlayback(c, env)
 			if !ok {
 				continue
@@ -374,6 +375,10 @@ func decodePlayback(c *conn, env protocol.Envelope) (any, bool) {
 		return decodeAs[protocol.SkipWait](c, env)
 	case protocol.TypeLockControls:
 		return decodeAs[protocol.LockControls](c, env)
+	case protocol.TypeHostTransfer:
+		return decodeAs[protocol.HostTransfer](c, env)
+	case protocol.TypeStillHere:
+		return rooms.StillHere, true
 	}
 	return nil, false
 }

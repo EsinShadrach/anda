@@ -57,9 +57,9 @@ func runProbe(ctx context.Context, path string) (probe, error) {
 	return p, nil
 }
 
-// compatible reports whether browsers can play the streams as they are, so a remux (no
-// re-encoding) is enough. One vCPU can't transcode in real time, so anything else is
-// hidden until the VM grows (plan: "Changes for this VM").
+// compatible reports whether browsers can play the video as it is, so no video encoding
+// is needed. One vCPU can't transcode video in real time, so anything else is hidden until
+// the VM grows (plan: "Changes for this VM"). Audio is different: see codecArgs.
 func compatible(p probe) (bool, string) {
 	if p.VideoCodec != "h264" {
 		return false, "video is " + orNone(p.VideoCodec) + ", browsers need H.264"
@@ -70,10 +70,18 @@ func compatible(p probe) (bool, string) {
 	if p.PixFmt != "" && p.PixFmt != "yuv420p" && p.PixFmt != "yuvj420p" {
 		return false, "pixel format " + p.PixFmt + " isn't supported by browsers"
 	}
-	if p.AudioCodec != "" && p.AudioCodec != "aac" {
-		return false, "audio is " + p.AudioCodec + ", browsers need AAC"
-	}
 	return true, ""
+}
+
+// codecArgs copies the video, and copies AAC audio as it is. Any other audio (AC3, E-AC3,
+// DTS, TrueHD, FLAC, Opus...) is converted to AAC stereo: that costs a few percent of a
+// core (measured ~36x real time for 5.1 AC3), unlike video, and it opens up a large share
+// of releases.
+func codecArgs(p probe) []string {
+	if p.AudioCodec == "" || p.AudioCodec == "aac" {
+		return []string{"-c", "copy"}
+	}
+	return []string{"-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-ac", "2"}
 }
 
 func orNone(s string) string {
@@ -85,7 +93,7 @@ func orNone(s string) string {
 
 // remux copies the streams into fMP4 HLS segments. It writes to a temp dir and swaps it in
 // only when complete, so a player never sees half a film.
-func remux(ctx context.Context, src, dst string) error {
+func remux(ctx context.Context, src, dst string, codecs []string) error {
 	tmp := dst + ".tmp"
 	if err := os.RemoveAll(tmp); err != nil {
 		return err
@@ -97,7 +105,9 @@ func remux(ctx context.Context, src, dst string) error {
 		"-hide_banner", "-loglevel", "error", "-nostdin",
 		"-i", src,
 		"-map", "0:v:0", "-map", "0:a:0?",
-		"-c", "copy",
+	}
+	args = append(args, codecs...)
+	args = append(args,
 		"-f", "hls",
 		"-hls_time", "6",
 		"-hls_playlist_type", "vod",
@@ -105,7 +115,7 @@ func remux(ctx context.Context, src, dst string) error {
 		"-hls_fmp4_init_filename", "init.mp4",
 		"-hls_segment_filename", "seg_%05d.m4s",
 		"index.m3u8",
-	}
+	)
 	name := "ffmpeg"
 	// Low priority: a remux shares the one vCPU with everything else on the VM.
 	if nice, err := exec.LookPath("nice"); err == nil {
@@ -159,7 +169,7 @@ func (s *Service) prepare(ctx context.Context, m store.Media) {
 
 	start := time.Now()
 	rctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
-	err = remux(rctx, src, s.hlsDir(m.ID))
+	err = remux(rctx, src, s.hlsDir(m.ID), codecArgs(p))
 	cancel()
 	if err != nil {
 		fail(store.HLSFailed, err)

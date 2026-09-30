@@ -14,7 +14,8 @@ type fakeMedia struct{}
 func (fakeMedia) Info(_ context.Context, id int64) (protocol.Media, error) {
 	return protocol.Media{ID: id, Title: "Big Buck Bunny", URL: "/media/" + strconv.FormatInt(id, 10) + "/video"}, nil
 }
-func (fakeMedia) Touch(context.Context, int64) {}
+func (fakeMedia) Touch(context.Context, int64)   {}
+func (fakeMedia) Release(context.Context, int64) {}
 
 // twoInRoom puts rafe (host) and chioma in a room with a film picked.
 func twoInRoom(t *testing.T) (host, guest *client, seq int64) {

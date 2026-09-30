@@ -37,6 +37,7 @@ type torrentJobs struct {
 type jobProgress struct {
 	preparedSeconds float64
 	started         time.Time
+	cancel          context.CancelFunc // stops the download and remux
 }
 
 func (s *Service) jobs() *torrentJobs {
@@ -84,28 +85,63 @@ func (s *Service) startTorrent(m store.Media, sources []string) {
 		j.mu.Unlock()
 		return
 	}
-	j.running[m.ID] = &jobProgress{started: time.Now()}
+	ctx, cancel := context.WithCancel(s.ctx)
+	j.running[m.ID] = &jobProgress{started: time.Now(), cancel: cancel}
 	j.mu.Unlock()
 
 	go func() {
 		defer func() {
+			cancel()
 			j.mu.Lock()
 			delete(j.running, m.ID)
 			j.mu.Unlock()
 		}()
-		j.slots <- struct{}{}
+		select {
+		case j.slots <- struct{}{}:
+		case <-ctx.Done():
+			s.stopped(m)
+			return
+		}
 		defer func() { <-j.slots }()
-		s.prepareTorrent(s.ctx, m, sources)
+		s.prepareTorrent(ctx, m, sources)
 	}()
+}
+
+// Release is called when no room shows a film any more. If it's still downloading, the
+// download stops (plan: an empty room cleans up its torrent); picking it again restarts it.
+func (s *Service) Release(ctx context.Context, id int64) {
+	if s.InUse != nil && s.InUse()[id] {
+		return // another room is watching it
+	}
+	j := s.jobs()
+	j.mu.Lock()
+	jp, ok := j.running[id]
+	j.mu.Unlock()
+	if ok {
+		s.Log.Info("stopping download nobody is watching", "media", id)
+		jp.cancel()
+	}
+}
+
+// stopped records a preparation cancelled before it finished.
+func (s *Service) stopped(m store.Media) {
+	if err := s.Store.SetHLSState(s.ctx, m.ID, store.HLSFailed, "stopped: no room was watching"); err != nil {
+		s.Log.Error("set hls state", "err", err)
+	}
 }
 
 func (s *Service) prepareTorrent(ctx context.Context, m store.Media, sources []string) {
 	log := s.Log.With("media", m.ID, "title", m.Title, "hash", m.InfoHash)
 	fail := func(state string, err error) {
-		log.Warn("torrent not prepared", "state", state, "reason", err)
 		os.RemoveAll(s.hlsDir(m.ID))
-		if err := s.Store.SetHLSState(ctx, m.ID, state, err.Error()); err != nil {
-			log.Error("set hls state", "err", err)
+		if ctx.Err() != nil { // cancelled by Release, not a real failure
+			log.Info("torrent preparation stopped")
+			s.stopped(m)
+		} else {
+			log.Warn("torrent not prepared", "state", state, "reason", err)
+			if err := s.Store.SetHLSState(s.ctx, m.ID, state, err.Error()); err != nil {
+				log.Error("set hls state", "err", err)
+			}
 		}
 		rctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -146,7 +182,7 @@ func (s *Service) prepareTorrent(ctx context.Context, m store.Media, sources []s
 		return
 	}
 	start := time.Now()
-	if err := s.remuxLive(ctx, m.ID, url, dir); err != nil {
+	if err := s.remuxLive(ctx, m.ID, url, dir, codecArgs(p)); err != nil {
 		fail(store.HLSFailed, err)
 		return
 	}
@@ -166,7 +202,7 @@ func (s *Service) prepareTorrent(ctx context.Context, m store.Media, sources []s
 
 // remuxLive runs ffmpeg from the torrent stream into an event playlist, recording how
 // much of the film is prepared from its -progress output.
-func (s *Service) remuxLive(ctx context.Context, id int64, url, dir string) error {
+func (s *Service) remuxLive(ctx context.Context, id int64, url, dir string, codecs []string) error {
 	args := []string{
 		"-hide_banner", "-loglevel", "error", "-nostdin", "-nostats",
 		// A torrent can stall for a while between pieces; keep waiting rather than give up.
@@ -174,7 +210,9 @@ func (s *Service) remuxLive(ctx context.Context, id int64, url, dir string) erro
 		"-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_on_network_error", "1", "-reconnect_delay_max", "30",
 		"-i", url,
 		"-map", "0:v:0", "-map", "0:a:0?",
-		"-c", "copy",
+	}
+	args = append(args, codecs...)
+	args = append(args,
 		"-f", "hls",
 		"-hls_time", "6",
 		"-hls_playlist_type", "event", // grows while downloading; ENDLIST appended when done
@@ -183,7 +221,7 @@ func (s *Service) remuxLive(ctx context.Context, id int64, url, dir string) erro
 		"-hls_segment_filename", "seg_%05d.m4s",
 		"-progress", "pipe:1",
 		"index.m3u8",
-	}
+	)
 	name := "ffmpeg"
 	if nice, err := exec.LookPath("nice"); err == nil {
 		name, args = nice, append([]string{"-n", "10", "ffmpeg"}, args...)

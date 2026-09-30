@@ -151,6 +151,9 @@ func (r *Room) control(userID int64, s Sender, action string, lastSeq int64, now
 
 func (r *Room) mark(now time.Time, by int64, action string) {
 	r.pb.lastAt, r.pb.lastBy, r.pb.lastAction = now, by, action
+	if mem, ok := r.members[by]; ok {
+		r.active(mem)
+	}
 }
 
 // startGettingReady blocks on every connected member until they've buffered, capped by
@@ -263,14 +266,32 @@ func (r *Room) setMedia(userID int64, s Sender, in protocol.SetMedia) {
 	}
 	r.m.media.Touch(ctx, m.ID)
 	now := time.Now()
-	locked := r.pb.locked
-	seq := r.pb.seq
+	prev := r.pb
 	r.pb = newPlayback()
-	r.pb.seq, r.pb.locked = seq, locked
+	r.pb.seq, r.pb.locked = prev.seq, prev.locked
 	r.pb.media = &m
 	r.pb.anchor = now
-	r.mark(now, userID, protocol.TypeSetMedia)
-	r.publish(now, userID, protocol.TypeSetMedia, true)
+	action := protocol.TypeSetMedia
+	if in.Position > 0 && prev.media != nil {
+		// Switching release mid-film (e.g. the torrent can't keep up): carry on from here,
+		// and keep playing if the room was, once everyone has the new source buffered.
+		action = "switch"
+		r.pb.pos = in.Position
+		if prev.want == protocol.WantPlaying {
+			r.pb.want = protocol.WantPlaying
+			r.startGettingReady(now)
+		}
+	}
+	r.mark(now, userID, action)
+	r.publish(now, userID, action, true)
+	if prev.media != nil && prev.media.ID != m.ID {
+		old := prev.media.ID
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			r.m.media.Release(ctx, old)
+		}()
+	}
 }
 
 func (r *Room) bufferReport(userID int64, in protocol.BufferReport) {
@@ -323,6 +344,7 @@ func (r *Room) skipWait(userID int64, s Sender, in protocol.SkipWait) {
 		r.reject(s, "not_host", protocol.TypeSkipWait, r.host)
 		return
 	}
+	r.active(r.members[userID])
 	now := time.Now()
 	if m, ok := r.members[in.UserID]; ok {
 		m.skipUntil = now.Add(skipWaitFor)
@@ -341,6 +363,7 @@ func (r *Room) lockControls(userID int64, s Sender, in protocol.LockControls) {
 		r.reject(s, "not_host", protocol.TypeLockControls, r.host)
 		return
 	}
+	r.active(r.members[userID])
 	if r.pb.locked == in.Locked || r.pb.media == nil {
 		r.pb.locked = in.Locked
 		return

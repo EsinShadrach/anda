@@ -34,6 +34,9 @@ const historyLimit = 50
 type MediaInfo interface {
 	Info(ctx context.Context, id int64) (protocol.Media, error)
 	Touch(ctx context.Context, id int64)
+	// Release says no room is showing the film any more (room closed, or switched away);
+	// a download still in progress for it can stop.
+	Release(ctx context.Context, id int64)
 }
 
 type Manager struct {
@@ -47,19 +50,29 @@ type Manager struct {
 	// idleTimeout is how long an empty room stays in memory.
 	idleTimeout time.Duration
 
+	// IdleAfter: someone connected but idle this long is asked "Still watching?".
+	IdleAfter time.Duration
+	// AnswerWithin: no answer to "Still watching?" by then marks them away.
+	AnswerWithin time.Duration
+	// TickEvery is how often rooms check for the end of the film and idle members.
+	TickEvery time.Duration
+
 	mu   sync.Mutex
 	live map[string]*Room
 }
 
 func NewManager(rooms store.Rooms, chat store.Chat, media MediaInfo, log *slog.Logger) *Manager {
 	return &Manager{
-		rooms:       rooms,
-		chat:        chat,
-		media:       media,
-		log:         log,
-		awayGrace:   60 * time.Second,
-		idleTimeout: 5 * time.Minute,
-		live:        make(map[string]*Room),
+		rooms:        rooms,
+		chat:         chat,
+		media:        media,
+		log:          log,
+		awayGrace:    60 * time.Second,
+		idleTimeout:  5 * time.Minute,
+		IdleAfter:    3 * time.Hour,
+		AnswerWithin: 2 * time.Minute,
+		TickEvery:    5 * time.Second,
+		live:         make(map[string]*Room),
 	}
 }
 
@@ -217,12 +230,21 @@ func (m *Manager) Playback(code string, userID int64, s Sender, msg any) {
 			r.skipWait(userID, s, p)
 		case protocol.LockControls:
 			r.lockControls(userID, s, p)
+		case protocol.HostTransfer:
+			r.hostTransfer(userID, s, p)
+		case stillHere:
+			r.stillHere(userID)
 		}
 	})
 	if !ok {
 		s.Send(protocol.EncodeError(protocol.ErrNotInRoom, "Join the room first."))
 	}
 }
+
+// StillHere is the payload-less answer to still_there, as a Playback message.
+type stillHere struct{}
+
+var StillHere any = stillHere{}
 
 // Online returns how many members are connected to a live room (0 if not live).
 func (m *Manager) Online(code string) int {

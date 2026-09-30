@@ -33,8 +33,8 @@ var (
 	// Release-name markers for streams browsers can't play without transcoding, which one
 	// vCPU can't do in real time. ffprobe is the final word after download starts; this
 	// just keeps obvious misses off the list.
+	// Audio isn't filtered: non-AAC audio is converted while remuxing (cheap, unlike video).
 	videoRE = regexp.MustCompile(`(?i)(\bx\.?265\b|\bh\.?265\b|\bhevc\b|\bav1\b|\bvp9\b|\b10.?bit\b|\bhdr(10)?\b|\bdolby.?vision\b|\bdv\b|\bxvid\b|\bdivx\b)`)
-	audioRE = regexp.MustCompile(`(?i)(\bdts\b|\btruehd\b|\batmos\b|\be?-?ac-?3\b|\bddp\d?|\bdd\+|\bdd[257]\.[01]\b|\bflac\b|\bopus\b)`)
 	extRE   = regexp.MustCompile(`(?i)\.(webm|avi|wmv|flv|ts|m2ts)$`)
 )
 
@@ -72,8 +72,6 @@ func classify(a AddonStream, source string) Stream {
 		s.hidden = "not a torrent"
 	case videoRE.MatchString(text) || extRE.MatchString(a.BehaviorHints.Filename):
 		s.hidden = "video"
-	case audioRE.MatchString(text):
-		s.hidden = "audio"
 	case s.SizeBytes > maxSize:
 		s.hidden = "size"
 	}

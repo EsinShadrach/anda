@@ -258,12 +258,13 @@ func toProto(m store.Media) protocol.Media {
 		state = "preparing"
 	}
 	return protocol.Media{
-		ID:       m.ID,
-		Title:    m.Title,
-		URL:      "/media/" + strconv.FormatInt(m.ID, 10) + "/index.m3u8",
-		Duration: m.Duration,
-		Poster:   m.Poster,
-		Year:     m.Year,
-		State:    state,
+		ID:        m.ID,
+		Title:     m.Title,
+		URL:       "/media/" + strconv.FormatInt(m.ID, 10) + "/index.m3u8",
+		Duration:  m.Duration,
+		Poster:    m.Poster,
+		Year:      m.Year,
+		CatalogID: m.CatalogID,
+		State:     state,
 	}
 }
