@@ -44,6 +44,9 @@ type member struct {
 	stallSince   time.Time // zero unless currently stalling
 	skipUntil    time.Time // host said "don't wait" for them
 
+	connection string    // good | fair | poor; "" until their first buffer report
+	lastStall  time.Time // most recent report of stalling
+
 	lastAction time.Time // last thing they did themselves (not automatic reports)
 	askedAt    time.Time // when "Still watching?" was sent; zero if not waiting on an answer
 }
@@ -268,7 +271,7 @@ func (r *Room) snapshot() protocol.RoomState {
 	slices.SortFunc(ordered, func(a, b *member) int { return cmp.Compare(a.joinedAt, b.joinedAt) })
 	members := make([]protocol.Member, len(ordered))
 	for i, m := range ordered {
-		members[i] = protocol.Member{UserID: m.user.ID, Username: m.user.Username, Status: m.status}
+		members[i] = protocol.Member{UserID: m.user.ID, Username: m.user.Username, Status: m.status, Connection: m.connection}
 	}
 	chat := make([]protocol.ChatMessage, len(r.chat))
 	for i, c := range r.chat {

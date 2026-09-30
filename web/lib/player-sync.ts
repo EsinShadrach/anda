@@ -39,6 +39,9 @@ export class PlayerSync {
   private selfPauseAt = 0;
   private selfSeek = { target: -1, at: 0 };
   private listeners = new Set<() => void>();
+  private duckFactor = 1; // < 1 while someone on voice is talking
+  private duckTimer: ReturnType<typeof setInterval> | undefined;
+  private applyingDuck = false;
   private detachVideo: (() => void) | null = null;
   private state: PlayerState = {
     currentTime: 0,
@@ -71,7 +74,7 @@ export class PlayerSync {
   attach(video: HTMLVideoElement) {
     this.detach();
     this.video = video;
-    video.volume = this.state.volume;
+    video.volume = this.state.volume * this.duckFactor;
     video.muted = this.state.muted;
     const on = <K extends keyof HTMLVideoElementEventMap>(type: K, fn: () => void) => {
       video.addEventListener(type, fn);
@@ -95,7 +98,11 @@ export class PlayerSync {
       on("loadedmetadata", () => this.patch({ duration: video.duration || 0 })),
       on("timeupdate", this.readTime),
       on("progress", this.readTime),
-      on("volumechange", () => this.patch({ volume: video.volume, muted: video.muted })),
+      on("volumechange", () => {
+        // Our own ducking isn't the user changing the volume.
+        if (this.applyingDuck) this.patch({ muted: video.muted });
+        else this.patch({ volume: video.volume / this.duckFactor, muted: video.muted });
+      }),
     ];
     this.detachVideo = () => offs.forEach((off) => off());
     this.tick = setInterval(this.reconcile, TICK_MS);
@@ -104,6 +111,7 @@ export class PlayerSync {
 
   detach() {
     clearInterval(this.tick);
+    clearInterval(this.duckTimer);
     this.detachVideo?.();
     this.detachVideo = null;
     this.video = null;
@@ -136,9 +144,34 @@ export class PlayerSync {
   setVolume(volume: number) {
     const v = this.video;
     if (!v) return;
-    v.volume = Math.min(1, Math.max(0, volume));
-    v.muted = v.volume === 0;
+    volume = Math.min(1, Math.max(0, volume));
+    this.patch({ volume });
+    this.applyingDuck = true;
+    v.volume = volume * this.duckFactor;
+    v.muted = volume === 0;
+    this.applyingDuck = false;
     this.persist();
+  }
+
+  /**
+   * Lower the film while someone on voice talks (plan: "lower movie volume while someone
+   * speaks"), easing over ~250ms down and ~600ms back up so it doesn't pump.
+   */
+  duck(on: boolean) {
+    const target = on ? 0.3 : 1;
+    clearInterval(this.duckTimer);
+    const step = on ? 0.14 : 0.06;
+    this.duckTimer = setInterval(() => {
+      const d = target - this.duckFactor;
+      this.duckFactor = Math.abs(d) <= step ? target : this.duckFactor + Math.sign(d) * step;
+      const v = this.video;
+      if (v) {
+        this.applyingDuck = true;
+        v.volume = this.state.volume * this.duckFactor;
+        this.applyingDuck = false;
+      }
+      if (this.duckFactor === target) clearInterval(this.duckTimer);
+    }, 40);
   }
 
   toggleMute() {
@@ -281,7 +314,7 @@ export class PlayerSync {
 
   private persist() {
     try {
-      localStorage.setItem("anda.volume", String(this.video?.volume ?? 1));
+      localStorage.setItem("anda.volume", String(this.state.volume));
       localStorage.setItem("anda.muted", this.video?.muted ? "1" : "0");
     } catch {
       // storage blocked

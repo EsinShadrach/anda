@@ -4,7 +4,8 @@
 
 export const PROTOCOL_VERSION = 1;
 
-export type Member = { user_id: number; username: string; status: "online" | "away" };
+export type Connection = "good" | "fair" | "poor";
+export type Member = { user_id: number; username: string; status: "online" | "away"; connection?: Connection };
 
 export type ChatItem =
   | {
@@ -453,7 +454,7 @@ export class RoomConnection {
         break;
       }
       case "member_update": {
-        const { user_id, username, status } = payload;
+        const { user_id, username, status, connection } = payload;
         const known = this.view.members.find((m) => m.user_id === user_id);
         let members = this.view.members;
         let system: string | null = null;
@@ -461,11 +462,12 @@ export class RoomConnection {
           members = members.filter((m) => m.user_id !== user_id);
           system = `${username} left`;
         } else if (known) {
-          members = members.map((m) => (m.user_id === user_id ? { ...m, status } : m));
+          // connection is only sent when it changes; keep the last one otherwise.
+          members = members.map((m) => (m.user_id === user_id ? { ...m, status, connection: connection ?? m.connection } : m));
           // Marked away while still connected: we didn't answer "Still watching?".
           if (user_id === this.view.me && status === "away") this.set({ gate: "idle", stillThere: null });
         } else {
-          members = [...members, { user_id, username, status }];
+          members = [...members, { user_id, username, status, connection }];
           system = `${username} joined`;
         }
         this.set({ members, chat: system ? [...this.view.chat, sys(system)] : this.view.chat });

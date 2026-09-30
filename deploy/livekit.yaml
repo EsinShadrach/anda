@@ -1,0 +1,15 @@
+# LiveKit SFU for voice and camera (step 7). Keys come from LIVEKIT_KEYS, and the public IP
+# from --node-ip, both set from ~/anda/.env by docker-compose.yml.
+port: 7880            # signalling (WebSocket + HTTP); only Caddy reaches it, at /livekit
+rtc:
+  tcp_port: 7881      # ICE over TCP, for networks that block UDP
+  udp_port: 7882      # all UDP media multiplexed on one port (easy to open in a firewall)
+  use_external_ip: false
+turn:
+  enabled: true       # built-in TURN relay for clients behind strict NAT (the plan's coturn)
+  udp_port: 3478
+room:
+  empty_timeout: 300
+  max_participants: 16
+logging:
+  level: warn

@@ -21,6 +21,7 @@ import (
 	"anda/internal/rooms"
 	"anda/internal/store"
 	"anda/internal/torrent"
+	"anda/internal/voice"
 )
 
 func main() {
@@ -93,6 +94,14 @@ func run(log *slog.Logger) error {
 	gw.Register(mux)
 	films.Register(mux)
 	lib.Register(mux)
+	(&voice.Service{
+		URL:          os.Getenv("ANDA_LIVEKIT_URL"),
+		Key:          os.Getenv("ANDA_LIVEKIT_KEY"),
+		Secret:       os.Getenv("ANDA_LIVEKIT_SECRET"),
+		InRoom:       roomMgr.InRoom,
+		Authenticate: authSvc.UserFromRequest,
+		Log:          log,
+	}).Register(mux)
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		if err := db.Ping(r.Context()); err != nil {
 			http.Error(w, "db unavailable", http.StatusServiceUnavailable)
@@ -145,7 +154,7 @@ func envInt(key string, fallback int) int {
 // splitList parses a comma-separated env value, dropping blanks.
 func splitList(v string) []string {
 	var out []string
-	for _, s := range strings.Split(v, ",") {
+	for s := range strings.SplitSeq(v, ",") {
 		if s = strings.TrimSpace(s); s != "" {
 			out = append(out, s)
 		}

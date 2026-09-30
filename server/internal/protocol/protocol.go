@@ -81,10 +81,18 @@ type ChatSend struct {
 }
 
 type Member struct {
-	UserID   int64  `json:"user_id"`
-	Username string `json:"username"`
-	Status   string `json:"status"` // online | away
+	UserID     int64  `json:"user_id"`
+	Username   string `json:"username"`
+	Status     string `json:"status"`               // online | away
+	Connection string `json:"connection,omitempty"` // good | fair | poor, from their buffer reports
 }
+
+// Connection indicator values (the plan's green / amber / red).
+const (
+	ConnGood = "good"
+	ConnFair = "fair"
+	ConnPoor = "poor"
+)
 
 // Member statuses; "left" only appears in member_update.
 const (
@@ -230,9 +238,10 @@ type ActionRejected struct {
 }
 
 type MemberUpdate struct {
-	UserID   int64  `json:"user_id"`
-	Username string `json:"username"`
-	Status   string `json:"status"`
+	UserID     int64  `json:"user_id"`
+	Username   string `json:"username"`
+	Status     string `json:"status"`
+	Connection string `json:"connection,omitempty"`
 }
 
 type HostChanged struct {

@@ -19,6 +19,11 @@ rsync -az --delete -e "ssh -i $KEY" \
   --exclude .git --exclude .claude --exclude node_modules --exclude .next --exclude .env --exclude '*.db*' \
   ./ "$HOST:~/anda/"
 
+# LiveKit's API key and secret are generated on the VM once, never synced or committed.
+$SSH "cd ~/anda && touch .env && \
+  { grep -q '^LIVEKIT_SECRET=' .env || printf 'LIVEKIT_KEY=API%s\nLIVEKIT_SECRET=%s\n' \"\$(openssl rand -hex 6)\" \"\$(openssl rand -hex 32)\" >> .env; } && \
+  { grep -q '^LIVEKIT_NODE_IP=' .env || echo 'LIVEKIT_NODE_IP=${HOST#*@}' >> .env; }"
+
 $SSH 'cd ~/anda && \
   { docker network inspect edge >/dev/null 2>&1 || docker network create edge; } && \
   docker compose up -d --build && docker compose ps'

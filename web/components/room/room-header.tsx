@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "motion/react";
-import { CaretLeftIcon, ChatCircleIcon, CheckIcon, CopyIcon, CrownSimpleIcon } from "@phosphor-icons/react";
-import type { Member, RoomConnection, RoomView } from "@/lib/room";
+import { CaretLeftIcon, ChatCircleIcon, CheckIcon, CopyIcon, CrownSimpleIcon, MicrophoneIcon } from "@phosphor-icons/react";
+import type { Connection, Member, RoomConnection, RoomView } from "@/lib/room";
 import { Avatar } from "@/components/ui/avatar";
 import { Spinner } from "@/components/ui/spinner";
 
@@ -11,10 +11,14 @@ export function RoomHeader({
   view,
   conn,
   chat,
+  voice,
+  speaking,
   className = "",
 }: {
   view: RoomView;
   conn: RoomConnection;
+  voice?: React.ReactNode; // mic and camera buttons
+  speaking?: Set<number>; // user IDs talking on voice right now
   chat?: { unread: number; onOpen: () => void }; // phones, while chat is closed
   className?: string;
 }) {
@@ -32,8 +36,9 @@ export function RoomHeader({
       <InviteChip code={view.code} />
       <div className="flex-1" />
       <Reconnecting visible={view.status === "reconnecting"} />
+      {voice}
       <AnimatePresence initial={false}>{chat && <ChatButton key="chat" {...chat} />}</AnimatePresence>
-      <MembersButton view={view} conn={conn} />
+      <MembersButton view={view} conn={conn} speaking={speaking} />
     </header>
   );
 }
@@ -133,7 +138,7 @@ function Reconnecting({ visible }: { visible: boolean }) {
   );
 }
 
-function MembersButton({ view, conn }: { view: RoomView; conn: RoomConnection }) {
+function MembersButton({ view, conn, speaking }: { view: RoomView; conn: RoomConnection; speaking?: Set<number> }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const shown = view.members.slice(0, 3);
@@ -177,7 +182,7 @@ function MembersButton({ view, conn }: { view: RoomView; conn: RoomConnection })
             exit={{ opacity: 0, scale: 0.96, y: -4, transition: { duration: 0.12 } }}
             transition={{ type: "spring", bounce: 0, duration: 0.25 }}
             style={{ transformOrigin: "top right" }}
-            className="glass-thick absolute top-[calc(100%+8px)] right-0 z-30 w-[260px] rounded-2xl p-2"
+            className="glass-thick absolute top-[calc(100%+8px)] right-0 z-30 w-[288px] rounded-2xl p-2"
           >
             <p className="px-2.5 pt-1.5 pb-2 text-[12px] font-semibold tracking-[0.06em] text-fog-500 uppercase">
               In the room
@@ -189,6 +194,7 @@ function MembersButton({ view, conn }: { view: RoomView; conn: RoomConnection })
                   m={m}
                   me={m.user_id === view.me}
                   host={m.user_id === view.host}
+                  speaking={!!speaking?.has(m.user_id)}
                   onMakeHost={view.me === view.host && m.user_id !== view.me ? () => conn.hostTransfer(m.user_id) : undefined}
                 />
               ))}
@@ -200,7 +206,19 @@ function MembersButton({ view, conn }: { view: RoomView; conn: RoomConnection })
   );
 }
 
-function MemberRow({ m, me, host, onMakeHost }: { m: Member; me: boolean; host: boolean; onMakeHost?: () => void }) {
+function MemberRow({
+  m,
+  me,
+  host,
+  speaking,
+  onMakeHost,
+}: {
+  m: Member;
+  me: boolean;
+  host: boolean;
+  speaking: boolean;
+  onMakeHost?: () => void;
+}) {
   // Handing over can't be undone by us, so it takes a second tap to confirm.
   const [confirming, setConfirming] = useState(false);
   useEffect(() => {
@@ -212,9 +230,13 @@ function MemberRow({ m, me, host, onMakeHost }: { m: Member; me: boolean; host: 
   return (
     <li className="group flex h-11 items-center gap-3 rounded-xl px-2.5">
       <Avatar name={m.username} status={m.status} size={28} />
-      <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-fog-100">
-        {m.username}
-        {me && <span className="font-normal text-fog-500"> (you)</span>}
+      <span className="flex min-w-0 flex-1 items-center gap-1.5 text-[14px] font-medium text-fog-100">
+        <span className="truncate">
+          {m.username}
+          {me && <span className="font-normal text-fog-500"> (you)</span>}
+        </span>
+        {speaking && <MicrophoneIcon size={13} weight="fill" className="shrink-0 text-live" aria-label="talking" />}
+        {m.status === "online" && m.connection && <ConnectionDot connection={m.connection} />}
       </span>
       {host && (
         <span className="inline-flex items-center gap-1 text-[12px] font-semibold text-ember-400">
@@ -235,5 +257,16 @@ function MemberRow({ m, me, host, onMakeHost }: { m: Member; me: boolean; host: 
         </button>
       )}
     </li>
+  );
+}
+
+// The plan's connection indicator: green, amber or red from their film buffering, so
+// people can see why the room is waiting.
+function ConnectionDot({ connection }: { connection: Connection }) {
+  const label = connection === "good" ? "Smooth playback" : connection === "fair" ? "Some buffering" : "Struggling to keep up";
+  return (
+    <span title={label} aria-label={label} className="grid size-3 shrink-0 place-items-center">
+      <span className={`size-2 rounded-full ${connection === "good" ? "bg-live" : connection === "fair" ? "bg-away" : "bg-danger"}`} />
+    </span>
   );
 }

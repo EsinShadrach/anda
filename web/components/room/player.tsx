@@ -32,14 +32,17 @@ export function Player({
   compact,
   onChangeFilm,
   onSwitch,
+  duck,
 }: {
   view: RoomView;
   conn: RoomConnection;
+  duck?: boolean; // someone on voice is talking: lower the film
   compact?: boolean; // phone portrait: two-row controls
   onChangeFilm: () => void;
   onSwitch?: () => void; // another release of this film, same timestamp (Library films only)
 }) {
   const [sync] = useState(() => new PlayerSync(conn));
+  useEffect(() => sync.duck(!!duck), [sync, duck]);
   const ps = useSyncExternalStore(sync.subscribe, sync.getSnapshot, sync.getSnapshot);
   const frameRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);

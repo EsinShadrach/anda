@@ -259,6 +259,19 @@ func (m *Manager) Online(code string) int {
 	return <-n
 }
 
+// InRoom reports whether a user is currently a member of the live room (online or away).
+func (m *Manager) InRoom(code string, userID int64) bool {
+	r := m.get(code)
+	if r == nil {
+		return false
+	}
+	in := make(chan bool, 1)
+	if !r.do(func() { _, ok := r.members[userID]; in <- ok }) {
+		return false
+	}
+	return <-in
+}
+
 func (m *Manager) get(code string) *Room {
 	m.mu.Lock()
 	defer m.mu.Unlock()

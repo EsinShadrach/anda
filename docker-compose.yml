@@ -1,6 +1,7 @@
-# Anda on the 1 vCPU / 1 GB VM. Limits total ~416 MB: that only fits while Pulse is stopped
+# Anda on the 1 vCPU / 1 GB VM. Limits total ~544 MB: that only fits while Pulse is stopped
 # (see CLAUDE.md). The torrent engine is the big one.
-# No published ports: Caddy in ../proxy reaches us on the "edge" network as anda-api / anda-web.
+# Caddy in ../proxy reaches us on the "edge" network as anda-api / anda-web / anda-livekit.
+# The only published ports are LiveKit's media ports: WebRTC is UDP and can't go through Caddy.
 services:
   api:
     build: ./server
@@ -14,6 +15,11 @@ services:
       # Extra Stremio stream addons (comma-separated base URLs), set in ~/anda/.env on the VM.
       # The built-in open films work without any.
       ANDA_STREAM_ADDONS: ${ANDA_STREAM_ADDONS:-}
+      # Voice and camera: LiveKit's key and secret are generated into ~/anda/.env by deploy.sh.
+      # A relative URL is completed with the page's own host (wss://<host>/livekit, via Caddy).
+      ANDA_LIVEKIT_URL: /livekit
+      ANDA_LIVEKIT_KEY: ${LIVEKIT_KEY:-}
+      ANDA_LIVEKIT_SECRET: ${LIVEKIT_SECRET:-}
     volumes:
       - data:/data                 # SQLite file, films (/data/media) and their HLS (/data/hls)
     networks:
@@ -40,6 +46,26 @@ services:
     volumes:
       - torrent:/root/.stremio-server          # its own bounded cache (2 GB) and settings
     mem_limit: 256m
+
+  # LiveKit SFU: forwards voice and camera between browsers (never transcodes), with its
+  # built-in TURN relay. Signalling on 7880 through Caddy; media straight to the VM.
+  livekit:
+    image: livekit/livekit-server:v1.9
+    restart: unless-stopped
+    command: ["--config", "/etc/livekit.yaml", "--node-ip", "${LIVEKIT_NODE_IP:-127.0.0.1}"]
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_KEY:-devkey}: ${LIVEKIT_SECRET:-}"
+      GOMEMLIMIT: 96MiB
+    volumes:
+      - ./deploy/livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      - "7881:7881/tcp"   # ICE over TCP
+      - "7882:7882/udp"   # media
+      - "3478:3478/udp"   # TURN
+    networks:
+      edge:
+        aliases: [anda-livekit]
+    mem_limit: 128m
 
 networks:
   edge:

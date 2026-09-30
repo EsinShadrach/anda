@@ -12,6 +12,8 @@ import { RoomGone } from "./room-gone";
 import { Player } from "./player";
 import { Library } from "./library";
 import { Button } from "@/components/ui/button";
+import { VoiceSession, type VoiceState } from "@/lib/voice";
+import { PhoneCameraButton, VoiceButtons, VoiceNotice, VoiceTiles } from "./voice";
 
 function useIsPhone() {
   return useSyncExternalStore(
@@ -31,11 +33,47 @@ export function RoomView({ code }: { code: string }) {
   const phone = useIsPhone();
   // "new": pick any film. "switch": another release of the film on screen, same timestamp.
   const [picking, setPicking] = useState<"new" | "switch" | null>(null);
+  const [voice] = useState(() => new VoiceSession(code));
+  const vs = useSyncExternalStore(voice.subscribe, voice.getSnapshot, voice.getSnapshot);
 
   useEffect(() => {
     conn.start();
     return () => conn.stop();
   }, [conn]);
+
+  // Voice connects (receive-only) once we're in the room; mic and camera stay off until asked.
+  useEffect(() => {
+    if (view.joined) voice.start();
+  }, [voice, view.joined]);
+  useEffect(() => () => voice.stop(), [voice]);
+  useEffect(() => {
+    if (view.endedBy || view.notFound) voice.stop();
+  }, [voice, view.endedBy, view.notFound]);
+
+  // Browsers only play voices after a gesture: the first tap anywhere unlocks them.
+  useEffect(() => {
+    if (!vs.needsAudioTap) return;
+    const unlock = () => voice.unlockAudio();
+    document.addEventListener("pointerdown", unlock, { once: true });
+    return () => document.removeEventListener("pointerdown", unlock);
+  }, [voice, vs.needsAudioTap]);
+
+  // Hold T to talk (push-to-talk), except while typing.
+  useEffect(() => {
+    const typing = (e: KeyboardEvent) =>
+      e.target instanceof Element && !!e.target.closest("input, textarea, [contenteditable=true]");
+    const down = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== "t" || e.repeat || e.metaKey || e.ctrlKey || e.altKey || typing(e)) return;
+      voice.holdToTalk(true);
+    };
+    const up = (e: KeyboardEvent) => e.key.toLowerCase() === "t" && voice.holdToTalk(false);
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+    };
+  }, [voice]);
 
   if (view.endedBy) return <RoomGone code={code} endedBy={view.endedBy.id === view.me ? "you" : view.endedBy.username} />;
   if (view.notFound) return <RoomGone code={code} />;
@@ -43,10 +81,11 @@ export function RoomView({ code }: { code: string }) {
   return (
     <div className="fixed inset-0 overflow-hidden bg-ink-950">
       {phone ? (
-        <PhoneLayout view={view} conn={conn} onPick={() => setPicking("new")} onSwitch={() => setPicking("switch")} />
+        <PhoneLayout view={view} conn={conn} voice={voice} vs={vs} onPick={() => setPicking("new")} onSwitch={() => setPicking("switch")} />
       ) : (
-        <WideLayout view={view} conn={conn} onPick={() => setPicking("new")} onSwitch={() => setPicking("switch")} />
+        <WideLayout view={view} conn={conn} voice={voice} vs={vs} onPick={() => setPicking("new")} onSwitch={() => setPicking("switch")} />
       )}
+      <VoiceNotice state={vs} />
       <Library
         open={picking !== null}
         current={
@@ -69,15 +108,32 @@ export function RoomView({ code }: { code: string }) {
 }
 
 // Desktop / tablet / landscape: the stage fills the room; header and chat float over it.
-type LayoutProps = { view: View; conn: RoomConnection; onPick: () => void; onSwitch: () => void };
+type LayoutProps = {
+  view: View;
+  conn: RoomConnection;
+  voice: VoiceSession;
+  vs: VoiceState;
+  onPick: () => void;
+  onSwitch: () => void;
+};
 
-function WideLayout({ view, conn, onPick, onSwitch }: LayoutProps) {
+function WideLayout({ view, conn, voice, vs, onPick, onSwitch }: LayoutProps) {
   return (
     <>
       <div className="absolute inset-y-0 right-[392px] left-0">
-        <Stage view={view} conn={conn} onPick={onPick} onSwitch={onSwitch} />
+        <Stage view={view} conn={conn} voice={voice} vs={vs} onPick={onPick} onSwitch={onSwitch} />
+        {/* Above the player's own overlays ("Join the screening" z-20), below its cards (z-30). */}
+        <div className="absolute top-[72px] right-3 z-[25]">
+          <VoiceTiles state={vs} />
+        </div>
       </div>
-      <RoomHeader view={view} conn={conn} className="absolute top-3 right-[392px] left-3 z-20" />
+      <RoomHeader
+        view={view}
+        conn={conn}
+        voice={<VoiceButtons voice={voice} state={vs} />}
+        speaking={speakingIds(vs)}
+        className="absolute top-3 right-[392px] left-3 z-30"
+      />
       <aside aria-label="Chat" className="glass-thick absolute top-3 right-3 bottom-3 z-10 flex w-[368px] flex-col overflow-hidden rounded-[24px]">
         <div className="flex h-14 shrink-0 items-center justify-between px-5">
           <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-fog-50">Chat</h2>
@@ -94,7 +150,7 @@ function WideLayout({ view, conn, onPick, onSwitch }: LayoutProps) {
 
 // Phone portrait: 16:9 stage under a floating header; chat is a sheet that drags over it,
 // or away entirely (then the stage takes the whole screen).
-function PhoneLayout({ view, conn, onPick, onSwitch }: LayoutProps) {
+function PhoneLayout({ view, conn, voice, vs, onPick, onSwitch }: LayoutProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const sizerRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
@@ -147,11 +203,20 @@ function PhoneLayout({ view, conn, onPick, onSwitch }: LayoutProps) {
       <div ref={sizerRef} aria-hidden className="pointer-events-none invisible absolute inset-x-0 top-0 aspect-video pt-[env(safe-area-inset-top)]" />
       <motion.div style={{ height: stageHeight }} className="absolute inset-x-0 top-0">
         <div className={`absolute inset-0 transition-opacity duration-300 ${mode === "open" ? "opacity-40" : ""}`}>
-          <Stage view={view} conn={conn} onPick={onPick} onSwitch={onSwitch} compact />
+          <Stage view={view} conn={conn} voice={voice} vs={vs} onPick={onPick} onSwitch={onSwitch} compact />
+        </div>
+        <div className="absolute inset-x-0 top-[calc(60px+env(safe-area-inset-top))] z-[25] flex justify-end">
+          <VoiceTiles state={vs} compact extra={view.media ? <PhoneCameraButton voice={voice} state={vs} /> : null} />
         </div>
       </motion.div>
-      <div ref={headerRef} className="absolute inset-x-2 top-[max(8px,env(safe-area-inset-top))] z-20">
-        <RoomHeader view={view} conn={conn} chat={mode === "closed" ? { unread, onOpen: () => changeMode("docked") } : undefined} />
+      <div ref={headerRef} className="absolute inset-x-2 top-[max(8px,env(safe-area-inset-top))] z-30">
+        <RoomHeader
+          view={view}
+          conn={conn}
+          voice={<VoiceButtons voice={voice} state={vs} />}
+          speaking={speakingIds(vs)}
+          chat={mode === "closed" ? { unread, onOpen: () => changeMode("docked") } : undefined}
+        />
       </div>
       {geo.top > 0 && (
         <ChatSheet y={y} top={geo.top} dockedOffset={geo.docked} closedOffset={geo.full} mode={mode} onModeChange={changeMode}>
@@ -164,6 +229,10 @@ function PhoneLayout({ view, conn, onPick, onSwitch }: LayoutProps) {
 
 const CHAT_KEY = "anda.chat";
 
+function speakingIds(vs: VoiceState): Set<number> {
+  return new Set(vs.peers.filter((p) => p.speaking).map((p) => p.id));
+}
+
 function readChatMode(): ChatMode {
   try {
     return localStorage.getItem(CHAT_KEY) === "closed" ? "closed" : "docked";
@@ -173,12 +242,19 @@ function readChatMode(): ChatMode {
 }
 
 // The player once a film is picked; before that, the idle screen.
-function Stage({ view, conn, onPick, onSwitch, compact }: LayoutProps & { compact?: boolean }) {
+function Stage({ view, conn, vs, onPick, onSwitch, compact }: LayoutProps & { compact?: boolean }) {
   if (view.media && view.playback) {
     // No key per film: the same <video> element carries on across films and release
     // switches, so a browser that allowed sound once keeps allowing it.
     return (
-      <Player view={view} conn={conn} compact={compact} onChangeFilm={onPick} onSwitch={view.media.catalog_id ? onSwitch : undefined} />
+      <Player
+        view={view}
+        conn={conn}
+        compact={compact}
+        duck={vs.othersSpeaking}
+        onChangeFilm={onPick}
+        onSwitch={view.media.catalog_id ? onSwitch : undefined}
+      />
     );
   }
   return (

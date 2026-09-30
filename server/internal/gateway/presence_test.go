@@ -100,3 +100,29 @@ func TestEndOfFilm(t *testing.T) {
 	}
 	guest.expect(protocol.TypeStillThere, nil)
 }
+
+func TestConnectionIndicator(t *testing.T) {
+	host, guest, seq, guestID := twoInRoomWith(t, 7, nil)
+	playing(t, host, guest, seq) // both reported 5s ahead while starting: fair
+
+	// until waits for chimamanda's indicator to reach want (earlier updates may be queued).
+	until := func(want string) protocol.MemberUpdate {
+		t.Helper()
+		for {
+			var mu protocol.MemberUpdate
+			host.expect(protocol.TypeMemberUpdate, &mu)
+			if mu.UserID == guestID && mu.Connection == want {
+				return mu
+			}
+		}
+	}
+	guest.send(protocol.TypeBufferReport, protocol.BufferReport{Ahead: 30})
+	if mu := until(protocol.ConnGood); mu.Status != protocol.StatusOnline {
+		t.Fatalf("healthy: %+v", mu)
+	}
+	guest.send(protocol.TypeBufferReport, protocol.BufferReport{Ahead: 0, Stalling: true})
+	until(protocol.ConnPoor)
+	// Recovered, but it stalled a moment ago: fair, not straight back to good.
+	guest.send(protocol.TypeBufferReport, protocol.BufferReport{Ahead: 30})
+	until(protocol.ConnFair)
+}

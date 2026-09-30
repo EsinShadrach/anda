@@ -12,6 +12,10 @@ const (
 	raceWindow = 500 * time.Millisecond
 	// readyAhead is how much a client must buffer before "getting ready" clears.
 	readyAhead = 2.0
+	// fairAhead: less than this buffered while the film runs shows as a fair connection.
+	fairAhead = 8.0
+	// fairAfterStall: how long a stall keeps someone's indicator at fair after recovering.
+	fairAfterStall = time.Minute
 	// readyTimeout caps "getting ready" so one slow client can't hold the room forever;
 	// after it they catch up (or block again as buffering if they keep stalling).
 	readyTimeout = 8 * time.Second
@@ -341,6 +345,32 @@ func (r *Room) bufferReport(userID int64, in protocol.BufferReport) {
 	if changed {
 		r.publish(now, 0, "blockers", false)
 	}
+	r.updateConnection(mem, in, now)
+}
+
+// updateConnection sets a member's indicator from their latest report and announces a
+// change, so everyone can see who the room is waiting on and why:
+// poor = stalling or holding the room up; fair = a thin buffer while the film runs, or a
+// stall in the last minute; good otherwise.
+func (r *Room) updateConnection(mem *member, in protocol.BufferReport, now time.Time) {
+	if in.Stalling {
+		mem.lastStall = now
+	}
+	conn := protocol.ConnGood
+	reason, blocked := r.pb.blockers[mem.user.ID]
+	switch {
+	case in.Stalling || (blocked && reason == protocol.BlockBuffering):
+		conn = protocol.ConnPoor
+	case (r.pb.want == protocol.WantPlaying && in.Ahead < fairAhead) || now.Sub(mem.lastStall) < fairAfterStall:
+		conn = protocol.ConnFair
+	}
+	if conn == mem.connection {
+		return
+	}
+	mem.connection = conn
+	r.broadcast(protocol.TypeMemberUpdate, protocol.MemberUpdate{
+		UserID: mem.user.ID, Username: mem.user.Username, Status: mem.status, Connection: conn,
+	})
 }
 
 func (r *Room) skipWait(userID int64, s Sender, in protocol.SkipWait) {
