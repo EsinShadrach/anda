@@ -1,0 +1,31 @@
+# Anda on the shared 1 vCPU / 1 GB VM. Limits total 128 MB (budget ~150 MB; see CLAUDE.md).
+# No published ports: Caddy in ../proxy reaches us on the "edge" network as anda-api / anda-web.
+services:
+  api:
+    build: ./server
+    restart: unless-stopped
+    environment:
+      ANDA_SECURE_COOKIE: "true"   # served over HTTPS via Caddy
+      ANDA_TRUST_PROXY: "true"     # client IP from X-Forwarded-For, set by Caddy
+      GOMEMLIMIT: 72MiB            # GC works harder before hitting mem_limit
+    volumes:
+      - data:/data                 # SQLite file (and the film cache, later)
+    networks:
+      edge:
+        aliases: [anda-api]
+    mem_limit: 96m
+
+  web:
+    build: ./web
+    restart: unless-stopped
+    networks:
+      edge:
+        aliases: [anda-web]
+    mem_limit: 32m
+
+networks:
+  edge:
+    external: true
+
+volumes:
+  data:
