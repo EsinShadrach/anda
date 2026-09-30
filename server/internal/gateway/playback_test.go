@@ -23,22 +23,22 @@ func (fakeMedia) Info(_ context.Context, id int64) (protocol.Media, error) {
 func (fakeMedia) Touch(context.Context, int64)   {}
 func (fakeMedia) Release(context.Context, int64) {}
 
-// twoInRoom puts rafe (host) and chioma in a room with a film picked.
+// twoInRoom puts rafe (host) and chimamanda in a room with a film picked.
 func twoInRoom(t *testing.T) (host, guest *client, seq int64) {
 	host, guest, seq, _ = twoInRoomWith(t, 7, nil)
 	return host, guest, seq
 }
 
 // twoInRoomWith is twoInRoom with film id, and a chance to tune the manager's timers
-// before the room exists. It also returns chioma's user id.
+// before the room exists. It also returns chimamanda's user id.
 func twoInRoomWith(t *testing.T, film int64, tune func(*rooms.Manager)) (host, guest *client, seq, guestID int64) {
 	e := newEnv(t)
 	if tune != nil {
 		tune(e.rm)
 	}
-	rafe, chioma := e.signup("rafe"), e.signup("chioma")
+	rafe, chimamanda := e.signup("rafe"), e.signup("chimamanda")
 	code := e.createRoom(rafe)
-	host, guest = e.dial(rafe), e.dial(chioma)
+	host, guest = e.dial(rafe), e.dial(chimamanda)
 	host.hello("")
 	guestID = guest.hello("").UserID
 	for _, c := range []*client{host, guest} {
@@ -92,7 +92,7 @@ func TestPlayWaitsForEveryoneToGetReady(t *testing.T) {
 	host.update()
 
 	host.send(protocol.TypeBufferReport, protocol.BufferReport{Ahead: 5})
-	if u = guest.update(); len(u.Blockers) != 1 || u.Blockers[0].Username != "chioma" {
+	if u = guest.update(); len(u.Blockers) != 1 || u.Blockers[0].Username != "chimamanda" {
 		t.Fatalf("after host ready: %+v", u.Blockers)
 	}
 	host.update()
@@ -112,7 +112,7 @@ func TestPlayWaitsForEveryoneToGetReady(t *testing.T) {
 func TestSimultaneousClicksSettleOnOne(t *testing.T) {
 	host, guest, seq := twoInRoom(t)
 
-	// Both last saw seq. Rafe's play lands first; Chioma's pause, sent before she saw it,
+	// Both last saw seq. Rafe's play lands first; Chimamanda's pause, sent before she saw it,
 	// contradicts it within the race window and loses.
 	host.send(protocol.TypePlay, protocol.Play{LastSeq: seq})
 	played := host.update()
@@ -126,7 +126,7 @@ func TestSimultaneousClicksSettleOnOne(t *testing.T) {
 	// After the window, a considered pause (from the latest seq) goes through.
 	time.Sleep(550 * time.Millisecond)
 	guest.send(protocol.TypePause, protocol.Pause{LastSeq: played.Seq})
-	if u := host.update(); u.Want != protocol.WantPaused || u.By.Username != "chioma" {
+	if u := host.update(); u.Want != protocol.WantPaused || u.By.Username != "chimamanda" {
 		t.Fatalf("later pause: %+v", u)
 	}
 }
@@ -144,7 +144,7 @@ func TestManualPauseSurvivesBuffering(t *testing.T) {
 		t.Fatalf("not running: %+v", u)
 	}
 
-	// Chioma stalls past the grace period: the room waits for her.
+	// Chimamanda stalls past the grace period: the room waits for her.
 	guest.send(protocol.TypeBufferReport, protocol.BufferReport{Stalling: true})
 	time.Sleep(3100 * time.Millisecond)
 	guest.send(protocol.TypeBufferReport, protocol.BufferReport{Stalling: true})
@@ -152,7 +152,7 @@ func TestManualPauseSurvivesBuffering(t *testing.T) {
 		t.Fatalf("buffering: %+v", u)
 	}
 
-	// Rafe pauses during the wait, then Chioma's buffer fills.
+	// Rafe pauses during the wait, then Chimamanda's buffer fills.
 	host.send(protocol.TypePause, protocol.Pause{LastSeq: u.Seq})
 	host.update()
 	guest.send(protocol.TypeBufferReport, protocol.BufferReport{Ahead: 6})

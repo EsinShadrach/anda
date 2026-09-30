@@ -148,7 +148,7 @@ func TestRoomCodeHasNoVowels(t *testing.T) {
 
 func TestJoinChatPresence(t *testing.T) {
 	e := newEnv(t)
-	rafe, chioma := e.signup("rafe"), e.signup("chioma")
+	rafe, chimamanda := e.signup("rafe"), e.signup("chimamanda")
 	code := e.createRoom(rafe)
 
 	a := e.dial(rafe)
@@ -160,7 +160,7 @@ func TestJoinChatPresence(t *testing.T) {
 		t.Fatalf("first join: %+v", st)
 	}
 
-	b := e.dial(chioma)
+	b := e.dial(chimamanda)
 	b.hello("")
 	b.send(protocol.TypeJoinRoom, protocol.JoinRoom{Code: code})
 	b.expect(protocol.TypeRoomState, &st)
@@ -169,14 +169,14 @@ func TestJoinChatPresence(t *testing.T) {
 	}
 	var mu protocol.MemberUpdate
 	a.expect(protocol.TypeMemberUpdate, &mu)
-	if mu.Username != "chioma" || mu.Status != protocol.StatusOnline {
+	if mu.Username != "chimamanda" || mu.Status != protocol.StatusOnline {
 		t.Fatalf("presence: %+v", mu)
 	}
 
 	b.send(protocol.TypeChatSend, protocol.ChatSend{Text: "  hello  ", ClientMsgID: "c1"})
 	var m protocol.ChatMessage
 	a.expect(protocol.TypeChatMessage, &m)
-	if m.Text != "hello" || m.Sender.Username != "chioma" {
+	if m.Text != "hello" || m.Sender.Username != "chimamanda" {
 		t.Fatalf("chat: %+v", m)
 	}
 	b.expect(protocol.TypeChatMessage, &m) // sender gets the echo with its client ID
@@ -184,7 +184,7 @@ func TestJoinChatPresence(t *testing.T) {
 		t.Fatalf("echo: %+v", m)
 	}
 
-	// Chioma drops: Rafe sees her go away.
+	// Chimamanda drops: Rafe sees her go away.
 	b.ws.CloseNow()
 	a.expect(protocol.TypeMemberUpdate, &mu)
 	if mu.Status != protocol.StatusAway {
@@ -314,11 +314,11 @@ type visitList struct {
 
 func TestVisitedRoomsForgetAndEnd(t *testing.T) {
 	e := newEnv(t)
-	rafe, chioma := e.signup("rafe"), e.signup("chioma")
+	rafe, chimamanda := e.signup("rafe"), e.signup("chimamanda")
 	older := e.createRoom(rafe)
 	code := e.createRoom(rafe)
 
-	b := e.dial(chioma)
+	b := e.dial(chimamanda)
 	b.hello("")
 	b.send(protocol.TypeJoinRoom, protocol.JoinRoom{Code: code})
 	b.expect(protocol.TypeRoomState, nil)
@@ -328,16 +328,16 @@ func TestVisitedRoomsForgetAndEnd(t *testing.T) {
 	if len(list.Rooms) != 2 || !list.Rooms[0].Mine || list.Rooms[0].Code != code || list.Rooms[1].Code != older {
 		t.Fatalf("owner's list: %+v", list)
 	}
-	e.do("GET", "/api/me/rooms", chioma, &list)
+	e.do("GET", "/api/me/rooms", chimamanda, &list)
 	if len(list.Rooms) != 1 || list.Rooms[0].Mine || list.Rooms[0].Owner != "rafe" || list.Rooms[0].Online != 1 {
 		t.Fatalf("guest's list: %+v", list)
 	}
 
-	if s := e.do("DELETE", "/api/rooms/"+code, chioma, nil); s != http.StatusForbidden {
+	if s := e.do("DELETE", "/api/rooms/"+code, chimamanda, nil); s != http.StatusForbidden {
 		t.Fatalf("guest ended the room: %d", s)
 	}
 
-	// Rafe ends it while Chioma is inside: she's told, and it's gone for everyone.
+	// Rafe ends it while Chimamanda is inside: she's told, and it's gone for everyone.
 	if s := e.do("DELETE", "/api/rooms/"+code, rafe, nil); s != http.StatusNoContent {
 		t.Fatalf("end: %d", s)
 	}
@@ -346,7 +346,7 @@ func TestVisitedRoomsForgetAndEnd(t *testing.T) {
 	if ended.By.Username != "rafe" {
 		t.Fatalf("room_ended: %+v", ended)
 	}
-	if s := e.do("GET", "/api/rooms/"+code, chioma, nil); s != http.StatusNotFound {
+	if s := e.do("GET", "/api/rooms/"+code, chimamanda, nil); s != http.StatusNotFound {
 		t.Fatalf("ended room still there: %d", s)
 	}
 	b.send(protocol.TypeJoinRoom, protocol.JoinRoom{Code: code})
@@ -355,7 +355,7 @@ func TestVisitedRoomsForgetAndEnd(t *testing.T) {
 	if perr.Code != protocol.ErrRoomNotFound {
 		t.Fatalf("rejoin ended room: %+v", perr)
 	}
-	e.do("GET", "/api/me/rooms", chioma, &list)
+	e.do("GET", "/api/me/rooms", chimamanda, &list)
 	if len(list.Rooms) != 0 {
 		t.Fatalf("ended room still listed: %+v", list)
 	}
