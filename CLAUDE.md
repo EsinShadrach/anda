@@ -32,7 +32,7 @@ Don't edit `pulse/` from here. The one file Anda needs to change outside itself 
 
 One shared VM, no domain:
 
-- **Host:** `ubuntu@102.211.122.78`, SSH key `~/Downloads/test-macbook-air.pem`. Apache CloudStack KVM, Ubuntu 22.04.
+- **Host:** `ubuntu@102.211.122.78`, SSH key `~/Downloads/test-macbook-air.pem`. Apache CloudStack KVM, Ubuntu 24.04 (the VM was rebuilt from scratch on 2026-09-30: Docker was reinstalled from Docker's apt repo, and all data, including `~/anda/.env`, started over; Pulse isn't deployed on it).
 - **Size:** 1 vCPU, 957 MB RAM, **no swap**, 20 GB disk (~16 GB free).
 - **Tooling on the VM:** Docker 29 + Compose v5. No Go, Node or build tools, so build inside Docker images.
 - **Moving soon:** the user plans to move everything to a new VM (IP not known yet). Keep the host in one place (`HOST=` in `deploy.sh`) so the move is a one-line change.
