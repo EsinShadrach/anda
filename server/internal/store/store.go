@@ -107,6 +107,7 @@ type Media struct {
 	CatalogID string // e.g. an IMDb ID, for torrent films
 	InfoHash  string
 	FileIdx   int
+	SourceURL string // direct-link Library films, instead of InfoHash
 	Poster    string
 	Year      string
 }
@@ -117,6 +118,7 @@ type TorrentMedia struct {
 	CatalogID string
 	InfoHash  string
 	FileIdx   int
+	SourceURL string // set instead of InfoHash for a direct link
 	SizeBytes int64
 	Poster    string
 	Year      string

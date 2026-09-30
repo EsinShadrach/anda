@@ -603,7 +603,9 @@ function PreparingCard({
   const catchingUp = resumeAt > 12;
   const pct = catchingUp
     ? Math.min(100, ((progress?.prepared_seconds ?? 0) / (resumeAt + 12)) * 100)
-    : progress && progress.size_bytes
+    : progress?.direct
+      ? Math.min(100, ((progress.prepared_seconds ?? 0) / (progress.duration || Infinity)) * 100)
+      : progress && progress.size_bytes
       ? Math.min(100, (progress.downloaded / progress.size_bytes) * 100)
       : 0;
   return (
@@ -616,7 +618,9 @@ function PreparingCard({
           {catchingUp ? `Catching up to ${fmt(resumeAt)}` : `Getting ${title} ready`}
         </p>
         <p className="text-[13px] text-fog-300">
-          {!progress || progress.peers === 0
+          {progress?.direct
+            ? "Downloading from a direct link"
+            : !progress || progress.peers === 0
             ? "Finding people to download it from"
             : `From ${progress.peers} ${progress.peers === 1 ? "peer" : "peers"} · ${formatSpeed(progress.speed)}`}
         </p>
@@ -636,11 +640,15 @@ function PreparingCard({
 }
 
 function DownloadBadge({ progress }: { progress: import("@/lib/api").Progress }) {
-  const pct = progress.size_bytes ? Math.round((progress.downloaded / progress.size_bytes) * 100) : 0;
+  const pct = progress.direct
+    ? Math.round((progress.prepared_seconds / (progress.duration || Infinity)) * 100)
+    : progress.size_bytes
+      ? Math.round((progress.downloaded / progress.size_bytes) * 100)
+      : 0;
   return (
     <span className="ml-3 inline-flex items-center gap-1.5 rounded-full bg-white/8 px-2.5 py-1 text-[12px] font-medium text-fog-300 tabular-nums" title="Still downloading; you can only skip as far as it's got">
       <CloudArrowDownIcon size={14} className="text-ember-400" />
-      {pct}%<span className="max-sm:hidden"> · {formatSpeed(progress.speed)}</span>
+      {pct}%{!progress.direct && <span className="max-sm:hidden"> · {formatSpeed(progress.speed)}</span>}
     </span>
   );
 }

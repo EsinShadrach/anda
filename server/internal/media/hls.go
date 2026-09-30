@@ -24,9 +24,16 @@ type probe struct {
 	Duration   float64
 }
 
+// netProtocols limits ffmpeg to plain network reads for URL inputs, so a crafted source
+// can't reach local files (file:, concat:, subfile:...) or other protocols.
+const netProtocols = "http,https,tls,tcp"
+
 func runProbe(ctx context.Context, path string) (probe, error) {
-	out, err := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-print_format", "json",
-		"-show_streams", "-show_format", path).Output()
+	args := []string{"-v", "error", "-print_format", "json", "-show_streams", "-show_format"}
+	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
+		args = append(args, "-protocol_whitelist", netProtocols)
+	}
+	out, err := exec.CommandContext(ctx, "ffprobe", append(args, path)...).Output()
 	if err != nil {
 		return probe{}, fmt.Errorf("ffprobe: %w", err)
 	}

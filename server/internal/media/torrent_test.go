@@ -168,3 +168,84 @@ func TestTorrentPrepareAndEvict(t *testing.T) {
 		t.Fatal("the newer film should stay")
 	}
 }
+
+func TestDirectLinkPrepare(t *testing.T) {
+	for _, bin := range []string{"ffmpeg", "ffprobe"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skip(bin + " not installed")
+		}
+	}
+	dir := t.TempDir()
+	clip := filepath.Join(dir, "film.mp4")
+	if out, err := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "testsrc=size=160x90:rate=24:duration=8",
+		"-f", "lavfi", "-i", "sine=frequency=440:duration=8",
+		"-c:v", "libx264", "-g", "48", "-c:a", "ac3", "-pix_fmt", "yuv420p", "-shortest", clip).CombinedOutput(); err != nil {
+		t.Fatalf("make clip: %v %s", err, out)
+	}
+	// A plain web server, like a CDN behind an addon's direct link (range requests and all).
+	web := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, clip)
+	}))
+	defer web.Close()
+
+	db, err := store.OpenSQLite(context.Background(), filepath.Join(dir, "anda.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := &Service{ // no torrent engine at all
+		Dir: filepath.Join(dir, "media"), HLSDir: filepath.Join(dir, "hls"), Store: db,
+		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		ctx: ctx,
+	}
+
+	if _, err := s.PrepareTorrent(ctx, store.TorrentMedia{Title: "Nope", SourceURL: "file://" + clip}, nil); err == nil {
+		t.Fatal("a file:// source must be refused")
+	}
+	m, err := s.PrepareTorrent(ctx, store.TorrentMedia{Title: "Linked", CatalogID: "tt2", SourceURL: web.URL + "/film.mp4"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := s.Progress(ctx, m.ID); !p.Direct {
+		t.Fatalf("progress should say direct: %+v", p)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		got, _ := db.MediaByID(ctx, m.ID)
+		if got.HLSState == store.HLSReady {
+			if got.SourceURL == "" || got.InfoHash != "" || got.Duration < 7 || got.AudioCodec != "ac3" {
+				t.Fatalf("ready: %+v", got)
+			}
+			break
+		}
+		if got.HLSState == store.HLSFailed || time.Now().After(deadline) {
+			t.Fatalf("state %q: %s", got.HLSState, got.HLSError)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// The same link again is the same film, already cached.
+	again, err := s.PrepareTorrent(ctx, store.TorrentMedia{Title: "Linked", SourceURL: web.URL + "/film.mp4"}, nil)
+	if err != nil || again.ID != m.ID || again.HLSState != store.HLSReady {
+		t.Fatalf("second pick: %+v %v", again, err)
+	}
+	if shelf, _ := db.ReadyTorrentMedia(ctx); len(shelf) != 1 {
+		t.Fatalf("direct films share the Library cache: %+v", shelf)
+	}
+
+	// Files gone behind the database's back: at startup the film stops claiming to be
+	// ready, and picking it again prepares it afresh.
+	os.RemoveAll(s.hlsDir(m.ID))
+	s.verifyReady(ctx)
+	if got, _ := db.MediaByID(ctx, m.ID); got.HLSState != store.HLSFailed {
+		t.Fatalf("missing files: state %q", got.HLSState)
+	}
+	if shelf, _ := db.ReadyMedia(ctx); len(shelf) != 0 {
+		t.Fatalf("missing film still on the shelf: %+v", shelf)
+	}
+	if again, err := s.PrepareTorrent(ctx, store.TorrentMedia{Title: "Linked", SourceURL: web.URL + "/film.mp4"}, nil); err != nil || again.HLSState != store.HLSPending {
+		t.Fatalf("pick again after missing files: %+v %v", again, err)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
 
@@ -46,10 +47,69 @@ func TestClassify(t *testing.T) {
 			t.Errorf("info hash not lowercased: %s", got.infoHash)
 		}
 	}
-	noHash := mk("direct", "", 0)
-	noHash.InfoHash = ""
-	if classify(noHash, "x").hidden != "not a torrent" {
-		t.Error("URL streams should be hidden for now")
+
+	// Direct links: shown when they look like a public http(s) file, with their own key.
+	link := func(url, headers string) AddonStream {
+		a := AddonStream{Name: "Addon", Title: "Film.2019.1080p.WEB.x264", URL: url}
+		if headers != "" {
+			a.BehaviorHints.ProxyHeaders = json.RawMessage(headers)
+		}
+		return a
+	}
+	d := classify(link("https://cdn.example.com/films/film.mp4", ""), "x")
+	if d.hidden != "" || !d.Direct || !strings.HasPrefix(d.Key, "u-") || d.sourceURL == "" || d.Quality != "1080p" {
+		t.Errorf("direct link: %+v", d)
+	}
+	for _, c := range []AddonStream{
+		link("https://cdn.example.com/film.mp4", `{"request":{"Referer":"x"}}`), // needs headers
+		link("http://torrent:11470/abc/0", ""),                                  // internal name
+		link("http://127.0.0.1:8080/api", ""),                                   // loopback
+		link("http://169.254.169.254/latest/meta-data", ""),                     // cloud metadata
+		link("http://printer.local/x.mp4", ""),
+		link("file:///etc/passwd", ""),
+		link("ftp://example.com/film.mp4", ""),
+		{Name: "YouTube", Title: "Trailer"}, // no url, no hash
+	} {
+		if got := classify(c, "x"); got.hidden != "unsupported" {
+			t.Errorf("%q should be unsupported, got %q", c.URL, got.hidden)
+		}
+	}
+	if got := classify(link("https://cdn.example.com/film.webm", ""), "x"); got.hidden != "video" {
+		t.Errorf("webm link: %q", got.hidden)
+	}
+}
+
+func TestCheckURL(t *testing.T) {
+	resolve := func(ips ...string) func(context.Context, string) ([]netip.Addr, error) {
+		return func(context.Context, string) ([]netip.Addr, error) {
+			var out []netip.Addr
+			for _, ip := range ips {
+				out = append(out, netip.MustParseAddr(ip))
+			}
+			return out, nil
+		}
+	}
+	ctx := context.Background()
+	cases := []struct {
+		url    string
+		lookup func(context.Context, string) ([]netip.Addr, error)
+		ok     bool
+	}{
+		{"https://cdn.example.com/f.mp4", resolve("93.184.216.34"), true},
+		{"https://cdn.example.com/f.mp4", resolve("2606:2800:220:1:248:1893:25c8:1946"), true},
+		{"https://rebind.example.com/f.mp4", resolve("10.0.0.5"), false},
+		{"https://mixed.example.com/f.mp4", resolve("93.184.216.34", "127.0.0.1"), false},
+		{"https://cgnat.example.com/f.mp4", resolve("100.100.1.1"), false},
+		{"https://v6local.example.com/f.mp4", resolve("::1"), false},
+		{"https://mapped.example.com/f.mp4", resolve("::ffff:192.168.1.1"), false},
+		{"http://93.184.216.34/f.mp4", nil, true},
+		{"http://[fd00::1]/f.mp4", nil, false},
+		{"http://user:pass@cdn.example.com/f.mp4", resolve("93.184.216.34"), false},
+	}
+	for _, c := range cases {
+		if err := checkURL(ctx, c.url, c.lookup); (err == nil) != c.ok {
+			t.Errorf("%s: err=%v, want ok=%v", c.url, err, c.ok)
+		}
 	}
 }
 
@@ -75,6 +135,12 @@ func TestHandlers(t *testing.T) {
 			w.Write([]byte(`{"metas":[{"id":"tt0000001","type":"movie","name":"Some Film","releaseInfo":"2019","poster":"https://img/p.jpg"},{"id":"tt0000002","type":"series","name":"A Show"}]}`))
 		case strings.HasPrefix(r.URL.Path, "/meta/movie/"):
 			w.Write([]byte(`{"meta":{"id":"tt0000001","name":"Some Film","releaseInfo":"2019","poster":"https://img/p.jpg","runtime":"101 min"}}`))
+		case r.URL.Path == "/stream/movie/tt0000003.json":
+			w.Write([]byte(`{"streams":[
+				{"name":"Fake","title":"Some.Film.1080p.x264.mp4","url":"https://cdn.example.com/some-film.mp4"},
+				{"name":"Fake","title":"Some.Film.720p.mp4","url":"https://evil.example.com/some-film.mp4"},
+				{"name":"Fake","title":"Internal","url":"http://anda-api:8080/api/me"}
+			]}`))
 		case r.URL.Path == "/stream/movie/tt0000001.json":
 			w.Write([]byte(`{"streams":[
 				{"name":"Fake\n720p","title":"Some.Film.720p.x264.AAC\n👤 10 💾 800 MB","infoHash":"1111111111111111111111111111111111111111","fileIdx":0},
@@ -93,6 +159,13 @@ func TestHandlers(t *testing.T) {
 		Catalog: addon.URL, StreamAddons: []string{addon.URL}, Media: prep,
 		Authenticate: func(*http.Request) (store.User, error) { return store.User{ID: 1}, nil },
 		Log:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		// cdn.example.com is public; evil.example.com resolves to a private address.
+		lookup: func(_ context.Context, host string) ([]netip.Addr, error) {
+			if host == "cdn.example.com" {
+				return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+			}
+			return []netip.Addr{netip.MustParseAddr("192.168.1.10")}, nil
+		},
 	}
 	mux := http.NewServeMux()
 	s.Register(mux)
@@ -148,6 +221,32 @@ func TestHandlers(t *testing.T) {
 	}
 	if prep.got == nil || prep.got.InfoHash != "2222222222222222222222222222222222222222" || prep.got.FileIdx != 1 || prep.got.Title != "Some Film" {
 		t.Fatalf("prepared: %+v", prep.got)
+	}
+
+	// Direct links: listed (the internal one hidden), and checked again before fetching.
+	var dl struct {
+		Streams []Stream
+		Hidden  map[string]int
+	}
+	call("GET", "/api/library/tt0000003/streams", &dl)
+	if len(dl.Streams) != 2 || !dl.Streams[0].Direct || dl.Hidden["unsupported"] != 1 {
+		t.Fatalf("direct streams: %+v hidden: %+v", dl.Streams, dl.Hidden)
+	}
+	var evilKey, goodKey string
+	for _, st := range dl.Streams {
+		if st.Quality == "720p" {
+			evilKey = st.Key
+		} else {
+			goodKey = st.Key
+		}
+	}
+	prep.got = nil
+	if code := call("POST", "/api/library/tt0000003/streams/"+evilKey+"/prepare", nil); code != 422 || prep.got != nil {
+		t.Fatalf("link resolving to a private address: %d %+v", code, prep.got)
+	}
+	if code := call("POST", "/api/library/tt0000003/streams/"+goodKey+"/prepare", nil); code != 202 ||
+		prep.got == nil || prep.got.SourceURL != "https://cdn.example.com/some-film.mp4" || prep.got.InfoHash != "" {
+		t.Fatalf("direct prepare: %d %+v", code, prep.got)
 	}
 
 	// A source that refuses is named, not silently empty; the rest still answer.

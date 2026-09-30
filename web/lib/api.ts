@@ -104,6 +104,7 @@ export type LibraryStream = {
   quality?: string;
   size_bytes?: number;
   seeders?: number;
+  direct?: boolean; // a direct link rather than a torrent
 };
 
 export type Progress = {
@@ -115,6 +116,7 @@ export type Progress = {
   size_bytes: number;
   speed: number;
   peers: number;
+  direct?: boolean; // a direct link: no peers, and downloaded/speed aren't known
 };
 
 export const library = {

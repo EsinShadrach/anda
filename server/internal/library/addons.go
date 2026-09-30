@@ -54,6 +54,8 @@ type AddonStream struct {
 	BehaviorHints struct {
 		Filename  string `json:"filename"`
 		VideoSize int64  `json:"videoSize"`
+		// Streams that only work with extra request headers (some debrid/proxy links).
+		ProxyHeaders json.RawMessage `json:"proxyHeaders"`
 	} `json:"behaviorHints"`
 }
 

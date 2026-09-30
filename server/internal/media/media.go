@@ -55,6 +55,7 @@ func (s *Service) Run(ctx context.Context) {
 	s.ctx = ctx
 	s.queue = make(chan store.Media, 64)
 	go s.worker(ctx)
+	s.verifyReady(ctx)
 	s.resumeTorrents(ctx)
 	t := time.NewTicker(rescanEvery)
 	defer t.Stop()
@@ -266,5 +267,30 @@ func toProto(m store.Media) protocol.Media {
 		Year:      m.Year,
 		CatalogID: m.CatalogID,
 		State:     state,
+	}
+}
+
+// verifyReady checks that every film marked ready still has its HLS files. If they're gone
+// (the HLS directory was cleared, or a volume was swapped), a local film is prepared again,
+// and a Library film is marked failed so picking it again downloads it afresh; otherwise
+// it would sit on the shelf and never play.
+func (s *Service) verifyReady(ctx context.Context) {
+	list, err := s.Store.ReadyMedia(ctx)
+	if err != nil {
+		s.Log.Error("list ready films", "err", err)
+		return
+	}
+	for _, m := range list {
+		if _, err := os.Stat(filepath.Join(s.hlsDir(m.ID), "index.m3u8")); err == nil {
+			continue
+		}
+		state, msg := store.HLSPending, ""
+		if m.Source == "torrent" {
+			state, msg = store.HLSFailed, "prepared files are missing; pick it again"
+		}
+		s.Log.Warn("prepared film has no files", "media", m.ID, "title", m.Title, "now", state)
+		if err := s.Store.SetHLSState(ctx, m.ID, state, msg); err != nil {
+			s.Log.Error("set hls state", "err", err)
+		}
 	}
 }

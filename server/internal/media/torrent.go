@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,10 +54,15 @@ var ErrIncompatible = errors.New("media: this release can't play in browsers")
 // PrepareTorrent registers a Library pick and starts preparing it if needed. It returns
 // right away; the film is playable once its playlist has a few segments (see Progress).
 func (s *Service) PrepareTorrent(ctx context.Context, t store.TorrentMedia, sources []string) (store.Media, error) {
-	if s.Torrent == nil {
+	switch {
+	case t.SourceURL != "":
+		// A direct link: no torrent engine needed. The Library has already checked it.
+		if u, err := url.Parse(t.SourceURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+			return store.Media{}, fmt.Errorf("media: bad source url")
+		}
+	case s.Torrent == nil:
 		return store.Media{}, errors.New("media: no torrent engine configured")
-	}
-	if !torrent.ValidInfoHash(t.InfoHash) {
+	case !torrent.ValidInfoHash(t.InfoHash):
 		return store.Media{}, fmt.Errorf("media: bad info hash")
 	}
 	m, err := s.Store.UpsertTorrentMedia(ctx, t)
@@ -143,9 +149,7 @@ func (s *Service) prepareTorrent(ctx context.Context, m store.Media, sources []s
 				log.Error("set hls state", "err", err)
 			}
 		}
-		rctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		s.Torrent.Remove(rctx, m.InfoHash)
+		s.removeTorrent(m)
 	}
 
 	if err := s.Store.SetHLSState(ctx, m.ID, store.HLSRemuxing, ""); err != nil {
@@ -153,18 +157,25 @@ func (s *Service) prepareTorrent(ctx context.Context, m store.Media, sources []s
 		return
 	}
 	s.evict(ctx, m.SizeBytes, m.ID) // make room first
-	if err := s.Torrent.Create(ctx, m.InfoHash, sources); err != nil {
-		fail(store.HLSFailed, err)
-		return
+	src := m.SourceURL
+	if src == "" {
+		if s.Torrent == nil {
+			fail(store.HLSFailed, errors.New("no torrent engine configured"))
+			return
+		}
+		if err := s.Torrent.Create(ctx, m.InfoHash, sources); err != nil {
+			fail(store.HLSFailed, err)
+			return
+		}
+		src = s.Torrent.StreamURL(m.InfoHash, m.FileIdx)
 	}
-	url := s.Torrent.StreamURL(m.InfoHash, m.FileIdx)
 
 	// Probing needs the file's header (and for MP4 its index); Stremio fetches those pieces first.
 	pctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-	p, err := runProbe(pctx, url)
+	p, err := runProbe(pctx, src)
 	cancel()
 	if err != nil {
-		fail(store.HLSFailed, fmt.Errorf("couldn't read the file from the swarm: %w", err))
+		fail(store.HLSFailed, fmt.Errorf("couldn't read the file from its source: %w", err))
 		return
 	}
 	if err := s.Store.SetProbe(ctx, m.ID, p.VideoCodec, p.AudioCodec, p.Duration); err != nil {
@@ -182,7 +193,7 @@ func (s *Service) prepareTorrent(ctx context.Context, m store.Media, sources []s
 		return
 	}
 	start := time.Now()
-	if err := s.remuxLive(ctx, m.ID, url, dir, codecArgs(p)); err != nil {
+	if err := s.remuxLive(ctx, m.ID, src, dir, codecArgs(p)); err != nil {
 		fail(store.HLSFailed, err)
 		return
 	}
@@ -193,10 +204,8 @@ func (s *Service) prepareTorrent(ctx context.Context, m store.Media, sources []s
 	if err := s.Store.SetHLSState(ctx, m.ID, store.HLSReady, ""); err != nil {
 		log.Error("set hls state", "err", err)
 	}
-	rctx, cancel2 := context.WithTimeout(context.Background(), 10*time.Second)
-	s.Torrent.Remove(rctx, m.InfoHash)
-	cancel2()
-	log.Info("torrent film ready", "took", time.Since(start).Round(time.Second), "duration", p.Duration)
+	s.removeTorrent(m)
+	log.Info("library film ready", "took", time.Since(start).Round(time.Second), "duration", p.Duration)
 	s.evict(ctx, 0, m.ID) // never the film that just arrived
 }
 
@@ -208,6 +217,7 @@ func (s *Service) remuxLive(ctx context.Context, id int64, url, dir string, code
 		// A torrent can stall for a while between pieces; keep waiting rather than give up.
 		"-rw_timeout", "180000000", // µs
 		"-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_on_network_error", "1", "-reconnect_delay_max", "30",
+		"-protocol_whitelist", netProtocols,
 		"-i", url,
 		"-map", "0:v:0", "-map", "0:a:0?",
 	}
@@ -264,17 +274,27 @@ func (s *Service) setPrepared(id int64, sec float64) {
 	}
 }
 
-// resumeTorrents restarts preparations a previous run left unfinished.
-func (s *Service) resumeTorrents(ctx context.Context) {
-	if s.Torrent == nil {
+// removeTorrent drops a torrent from the engine once its film is prepared or abandoned.
+func (s *Service) removeTorrent(m store.Media) {
+	if m.InfoHash == "" || s.Torrent == nil {
 		return
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	s.Torrent.Remove(ctx, m.InfoHash)
+}
+
+// resumeTorrents restarts preparations a previous run left unfinished.
+func (s *Service) resumeTorrents(ctx context.Context) {
 	list, err := s.Store.TorrentMediaInProgress(ctx)
 	if err != nil {
 		s.Log.Error("list unfinished torrents", "err", err)
 		return
 	}
 	for _, m := range list {
+		if m.SourceURL == "" && s.Torrent == nil {
+			continue
+		}
 		s.startTorrent(m, nil)
 	}
 }
@@ -289,6 +309,7 @@ type Progress struct {
 	SizeBytes       int64   `json:"size_bytes"`
 	Speed           float64 `json:"speed"` // bytes/s
 	Peers           int     `json:"peers"`
+	Direct          bool    `json:"direct,omitempty"` // a direct link: no peers or byte counts
 }
 
 func (s *Service) Progress(ctx context.Context, id int64) (Progress, error) {
@@ -296,7 +317,7 @@ func (s *Service) Progress(ctx context.Context, id int64) (Progress, error) {
 	if err != nil {
 		return Progress{}, err
 	}
-	p := Progress{Duration: m.Duration, SizeBytes: m.SizeBytes}
+	p := Progress{Duration: m.Duration, SizeBytes: m.SizeBytes, Direct: m.SourceURL != ""}
 	switch m.HLSState {
 	case store.HLSReady:
 		p.State, p.PreparedSeconds, p.Downloaded = "ready", m.Duration, m.SizeBytes
@@ -312,7 +333,7 @@ func (s *Service) Progress(ctx context.Context, id int64) (Progress, error) {
 		p.PreparedSeconds = jp.preparedSeconds
 	}
 	j.mu.Unlock()
-	if s.Torrent != nil && m.Source == "torrent" {
+	if s.Torrent != nil && m.Source == "torrent" && m.InfoHash != "" {
 		sctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
 		if st, err := s.Torrent.Stats(sctx, m.InfoHash, m.FileIdx); err == nil {

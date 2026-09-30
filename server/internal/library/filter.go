@@ -2,6 +2,9 @@ package library
 
 import (
 	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
+	"path"
 	"regexp"
 	"slices"
 	"strconv"
@@ -16,11 +19,13 @@ type Stream struct {
 	Quality   string `json:"quality,omitempty"`
 	SizeBytes int64  `json:"size_bytes,omitempty"`
 	Seeders   int    `json:"seeders,omitempty"`
+	Direct    bool   `json:"direct,omitempty"` // a direct link, not a torrent
 
-	hidden   string // why it's filtered out, "" if shown
-	infoHash string
-	fileIdx  int
-	sources  []string
+	hidden    string // why it's filtered out, "" if shown
+	infoHash  string
+	fileIdx   int
+	sources   []string
+	sourceURL string
 }
 
 // maxSize: after the OS, Docker and the database, the cache holds 3 to 5 films (plan).
@@ -67,10 +72,15 @@ func classify(a AddonStream, source string) Stream {
 	if m := seedRE.FindStringSubmatch(text); m != nil {
 		s.Seeders, _ = strconv.Atoi(m[1])
 	}
+	direct := a.InfoHash == "" && a.URL != ""
 	switch {
-	case a.InfoHash == "":
-		s.hidden = "not a torrent"
-	case videoRE.MatchString(text) || extRE.MatchString(a.BehaviorHints.Filename):
+	case a.InfoHash == "" && a.URL == "":
+		s.hidden = "unsupported" // e.g. YouTube or external links
+	case direct && len(a.BehaviorHints.ProxyHeaders) > 0 && string(a.BehaviorHints.ProxyHeaders) != "null":
+		s.hidden = "unsupported" // needs request headers ffmpeg won't be given
+	case direct && !plausibleURL(a.URL):
+		s.hidden = "unsupported"
+	case videoRE.MatchString(text) || extRE.MatchString(a.BehaviorHints.Filename) || (direct && extRE.MatchString(urlPath(a.URL))):
 		s.hidden = "video"
 	case s.SizeBytes > maxSize:
 		s.hidden = "size"
@@ -81,6 +91,14 @@ func classify(a AddonStream, source string) Stream {
 	}
 	s.sources = a.Sources
 	s.Key = s.infoHash + "-" + strconv.Itoa(s.fileIdx)
+	if direct {
+		s.Direct, s.sourceURL = true, a.URL
+		sum := sha256.Sum256([]byte(a.URL))
+		s.Key = "u-" + hex.EncodeToString(sum[:12])
+		if s.Release == "" {
+			s.Release = path.Base(urlPath(a.URL))
+		}
+	}
 	return s
 }
 

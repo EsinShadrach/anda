@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +35,7 @@ type Service struct {
 	Log          *slog.Logger
 
 	addons *addonClient
+	lookup func(ctx context.Context, host string) ([]netip.Addr, error) // DNS for checkURL; nil = system resolver
 
 	mu      sync.Mutex
 	metas   map[string]cached[Meta]
@@ -175,7 +177,7 @@ func (s *Service) handleStreams(w http.ResponseWriter, r *http.Request) {
 			Description: m.Description, Runtime: m.Runtime, Genres: m.Genres,
 		},
 		"streams": shown,
-		"hidden":  hidden,                            // reason → count: video | audio | size | not a torrent
+		"hidden":  hidden,                            // reason → count: video | size | unsupported
 		"failed":  append([]string{}, set.failed...), // sources that didn't answer
 	})
 }
@@ -197,13 +199,23 @@ func (s *Service) handlePrepare(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusNotFound, "stream_not_found", "That stream isn't available any more. Pick another.")
 		return
 	}
+	if pick.Direct {
+		cctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		err := checkURL(cctx, pick.sourceURL, s.lookup)
+		cancel()
+		if err != nil {
+			s.Log.Warn("direct link refused", "id", id, "err", err)
+			httpx.Error(w, http.StatusUnprocessableEntity, "unreachable", "That link can't be used. Pick another stream.")
+			return
+		}
+	}
 	m, _ := s.meta(r.Context(), id)
 	title := m.Name
 	if title == "" {
 		title = pick.Release
 	}
 	film, err := s.Media.PrepareTorrent(r.Context(), store.TorrentMedia{
-		Title: title, CatalogID: id, InfoHash: pick.infoHash, FileIdx: pick.fileIdx,
+		Title: title, CatalogID: id, InfoHash: pick.infoHash, FileIdx: pick.fileIdx, SourceURL: pick.sourceURL,
 		SizeBytes: pick.SizeBytes, Poster: m.Poster, Year: m.year(),
 	}, pick.sources)
 	if errors.Is(err, media.ErrIncompatible) {

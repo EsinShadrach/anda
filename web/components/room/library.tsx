@@ -7,6 +7,7 @@ import {
   FilmStripIcon,
   MagnifyingGlassIcon,
   PlayIcon,
+  LinkSimpleIcon,
   UsersIcon,
   WarningCircleIcon,
   XIcon,
@@ -417,6 +418,11 @@ function StreamRow({ stream, starting, disabled, onPlay }: { stream: LibraryStre
         <span className="flex items-center gap-2 text-[12px] text-fog-500">
           <span className="truncate">{stream.source}</span>
           {stream.size_bytes ? <span>· {formatSize(stream.size_bytes)}</span> : null}
+          {stream.direct ? (
+            <span className="inline-flex items-center gap-1" title="Downloads from a web link, not a torrent">
+              · <LinkSimpleIcon size={12} /> Direct link
+            </span>
+          ) : null}
           {stream.seeders ? (
             <span className="inline-flex items-center gap-1">
               · <UsersIcon size={12} /> {stream.seeders}
@@ -522,7 +528,7 @@ function hiddenText(h: Record<string, number>) {
   if (h.video) parts.push(`${h.video} need video transcoding (HEVC, 10-bit, WebM)`);
   if (h.audio) parts.push(`${h.audio} need audio transcoding (DTS, AC3)`);
   if (h.size) parts.push(`${h.size} over 4 GB`);
-  if (h["not a torrent"]) parts.push(`${h["not a torrent"]} direct links`);
+  if (h.unsupported) parts.push(`${h.unsupported} that can\u2019t be fetched (YouTube, links needing extra headers, private addresses)`);
   return `Hidden: ${parts.join(", ")}.`;
 }
 

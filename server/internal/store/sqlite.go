@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -324,7 +326,8 @@ func (s *SQLite) TouchMedia(ctx context.Context, id int64, at time.Time) error {
 
 const mediaCols = `SELECT id, title, size_bytes, status, path, COALESCE(last_watched_at, 0),
 	hls_state, COALESCE(hls_error, ''), COALESCE(video_codec, ''), COALESCE(audio_codec, ''), COALESCE(duration_seconds, 0),
-	source, COALESCE(catalog_id, ''), COALESCE(info_hash, ''), COALESCE(file_idx, 0), COALESCE(poster, ''), COALESCE(year, '')
+	source, COALESCE(catalog_id, ''), COALESCE(info_hash, ''), COALESCE(file_idx, 0), COALESCE(poster, ''), COALESCE(year, ''),
+	COALESCE(source_url, '')
 	FROM media`
 
 func (s *SQLite) scanMedia(row interface{ Scan(...any) error }) (Media, error) {
@@ -332,7 +335,7 @@ func (s *SQLite) scanMedia(row interface{ Scan(...any) error }) (Media, error) {
 	var watched int64
 	if err := row.Scan(&m.ID, &m.Title, &m.SizeBytes, &m.Status, &m.Path, &watched,
 		&m.HLSState, &m.HLSError, &m.VideoCodec, &m.AudioCodec, &m.Duration,
-		&m.Source, &m.CatalogID, &m.InfoHash, &m.FileIdx, &m.Poster, &m.Year); err != nil {
+		&m.Source, &m.CatalogID, &m.InfoHash, &m.FileIdx, &m.Poster, &m.Year, &m.SourceURL); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Media{}, ErrNotFound
 		}
@@ -345,12 +348,17 @@ func (s *SQLite) scanMedia(row interface{ Scan(...any) error }) (Media, error) {
 }
 
 func (s *SQLite) UpsertTorrentMedia(ctx context.Context, t TorrentMedia) (Media, error) {
-	path := fmt.Sprintf("torrent/%s/%d", t.InfoHash, t.FileIdx) // unique placeholder; torrent films live in the HLS dir
+	// A unique placeholder path; Library films live in the HLS dir.
+	path := fmt.Sprintf("torrent/%s/%d", t.InfoHash, t.FileIdx)
+	if t.SourceURL != "" {
+		sum := sha256.Sum256([]byte(t.SourceURL))
+		path = "url/" + hex.EncodeToString(sum[:12])
+	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO media (title, size_bytes, status, path, source, catalog_id, info_hash, file_idx, poster, year)
-		VALUES (?, ?, 'downloading', ?, 'torrent', NULLIF(?, ''), ?, ?, NULLIF(?, ''), NULLIF(?, ''))
+		INSERT INTO media (title, size_bytes, status, path, source, catalog_id, info_hash, file_idx, source_url, poster, year)
+		VALUES (?, ?, 'downloading', ?, 'torrent', NULLIF(?, ''), NULLIF(?, ''), ?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''))
 		ON CONFLICT (path) DO NOTHING`,
-		t.Title, t.SizeBytes, path, t.CatalogID, t.InfoHash, t.FileIdx, t.Poster, t.Year)
+		t.Title, t.SizeBytes, path, t.CatalogID, t.InfoHash, t.FileIdx, t.SourceURL, t.Poster, t.Year)
 	if err != nil {
 		return Media{}, err
 	}
