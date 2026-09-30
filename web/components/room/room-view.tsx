@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { FilmSlateIcon, FilmStripIcon } from "@phosphor-icons/react";
+import { motion, useMotionValue, useTransform } from "motion/react";
 import { RoomConnection, type RoomView as View } from "@/lib/room";
 import { Projector } from "@/components/projector";
 import { Spinner } from "@/components/ui/spinner";
 import { RoomHeader } from "./room-header";
 import { Chat } from "./chat";
-import { ChatSheet } from "./chat-sheet";
+import { ChatSheet, type ChatMode } from "./chat-sheet";
 import { RoomDialogs } from "./room-dialogs";
 import { RoomGone } from "./room-gone";
 import { Player } from "./player";
@@ -91,44 +92,84 @@ function WideLayout({ view, conn, onPick, onSwitch }: LayoutProps) {
   );
 }
 
-// Phone portrait: 16:9 stage under a floating header; chat is a sheet that drags over it.
+// Phone portrait: 16:9 stage under a floating header; chat is a sheet that drags over it,
+// or away entirely (then the stage takes the whole screen).
 function PhoneLayout({ view, conn, onPick, onSwitch }: LayoutProps) {
-  const stageRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const sizerRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
-  const [geo, setGeo] = useState({ top: 0, offset: 0 });
-  const [expanded, setExpanded] = useState(false);
+  const [geo, setGeo] = useState({ top: 0, docked: 0, full: 0 });
+  const [mode, setMode] = useState<ChatMode>(readChatMode);
+
+  // One value drives both: the sheet's clip, and below the docked point, the stage's height,
+  // so the film grows with the finger as chat is pulled away.
+  const y = useMotionValue(0);
+  const top = useMotionValue(0);
+  const dockedHeight = useMotionValue(0);
+  const stageHeight = useTransform([y, top, dockedHeight], ([v, t, d]: number[]) => Math.max(d, t + v));
 
   useLayoutEffect(() => {
     const measure = () => {
       const header = headerRef.current!.getBoundingClientRect();
-      const stage = stageRef.current!.getBoundingClientRect();
-      const top = header.bottom + 8;
-      setGeo({ top, offset: Math.max(0, stage.bottom - top) });
+      const docked = sizerRef.current!.getBoundingClientRect();
+      const full = rootRef.current!.getBoundingClientRect().height;
+      const t = header.bottom + 8;
+      setGeo({ top: t, docked: Math.max(0, docked.bottom - t), full: full - t });
+      top.set(t);
+      dockedHeight.set(docked.height);
     };
     measure();
     const ro = new ResizeObserver(measure);
-    ro.observe(stageRef.current!);
+    ro.observe(sizerRef.current!);
     ro.observe(headerRef.current!);
+    ro.observe(rootRef.current!);
     return () => ro.disconnect();
-  }, []);
+  }, [top, dockedHeight]);
+
+  const changeMode = (m: ChatMode) => {
+    setMode(m);
+    try {
+      if (m === "closed") localStorage.setItem(CHAT_KEY, "closed");
+      else localStorage.removeItem(CHAT_KEY);
+    } catch {
+      // storage blocked: it just won't be remembered
+    }
+  };
+
+  // Messages that arrived while chat was closed, for the header's badge.
+  const seen = useRef(view.chat.length);
+  if (mode !== "closed") seen.current = view.chat.length;
+  const unread = view.chat.slice(seen.current).filter((c) => c.kind === "msg" && c.senderId !== view.me).length;
 
   return (
-    <>
-      <div ref={stageRef} className="relative aspect-video w-full pt-[env(safe-area-inset-top)]">
-        <div className={`absolute inset-0 transition-opacity duration-300 ${expanded ? "opacity-40" : ""}`}>
+    <div ref={rootRef} className="absolute inset-0">
+      {/* Measures the docked stage: full width, 16:9, under the status bar. */}
+      <div ref={sizerRef} aria-hidden className="pointer-events-none invisible absolute inset-x-0 top-0 aspect-video pt-[env(safe-area-inset-top)]" />
+      <motion.div style={{ height: stageHeight }} className="absolute inset-x-0 top-0">
+        <div className={`absolute inset-0 transition-opacity duration-300 ${mode === "open" ? "opacity-40" : ""}`}>
           <Stage view={view} conn={conn} onPick={onPick} onSwitch={onSwitch} compact />
         </div>
-      </div>
+      </motion.div>
       <div ref={headerRef} className="absolute inset-x-2 top-[max(8px,env(safe-area-inset-top))] z-20">
-        <RoomHeader view={view} conn={conn} />
+        <RoomHeader view={view} conn={conn} chat={mode === "closed" ? { unread, onOpen: () => changeMode("docked") } : undefined} />
       </div>
       {geo.top > 0 && (
-        <ChatSheet top={geo.top} collapsedOffset={geo.offset} expanded={expanded} onExpandedChange={setExpanded}>
-          {(handle) => <Chat view={view} conn={conn} topInset={handle} onComposerFocus={() => setExpanded(true)} />}
+        <ChatSheet y={y} top={geo.top} dockedOffset={geo.docked} closedOffset={geo.full} mode={mode} onModeChange={changeMode}>
+          {(handle) => <Chat view={view} conn={conn} topInset={handle} onComposerFocus={() => changeMode("open")} />}
         </ChatSheet>
       )}
-    </>
+    </div>
   );
+}
+
+const CHAT_KEY = "anda.chat";
+
+function readChatMode(): ChatMode {
+  try {
+    return localStorage.getItem(CHAT_KEY) === "closed" ? "closed" : "docked";
+  } catch {
+    return "docked";
+  }
 }
 
 // The player once a film is picked; before that, the idle screen.

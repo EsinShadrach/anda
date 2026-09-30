@@ -1,13 +1,23 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "motion/react";
-import { CaretLeftIcon, CheckIcon, CopyIcon, CrownSimpleIcon } from "@phosphor-icons/react";
+import { CaretLeftIcon, ChatCircleIcon, CheckIcon, CopyIcon, CrownSimpleIcon } from "@phosphor-icons/react";
 import type { Member, RoomConnection, RoomView } from "@/lib/room";
 import { Avatar } from "@/components/ui/avatar";
 import { Spinner } from "@/components/ui/spinner";
 
 // Floating glass bar over the stage: out, the room code (tap to invite), who's here.
-export function RoomHeader({ view, conn, className = "" }: { view: RoomView; conn: RoomConnection; className?: string }) {
+export function RoomHeader({
+  view,
+  conn,
+  chat,
+  className = "",
+}: {
+  view: RoomView;
+  conn: RoomConnection;
+  chat?: { unread: number; onOpen: () => void }; // phones, while chat is closed
+  className?: string;
+}) {
   const router = useRouter();
   return (
     <header className={`flex items-center gap-2 ${className}`}>
@@ -22,6 +32,7 @@ export function RoomHeader({ view, conn, className = "" }: { view: RoomView; con
       <InviteChip code={view.code} />
       <div className="flex-1" />
       <Reconnecting visible={view.status === "reconnecting"} />
+      <AnimatePresence initial={false}>{chat && <ChatButton key="chat" {...chat} />}</AnimatePresence>
       <MembersButton view={view} conn={conn} />
     </header>
   );
@@ -74,6 +85,37 @@ function InviteChip({ code }: { code: string }) {
         {copied ? "Invite link copied" : ""}
       </span>
     </button>
+  );
+}
+
+// Brings a closed chat back; the badge counts messages that came in meanwhile.
+function ChatButton({ unread, onOpen }: { unread: number; onOpen: () => void }) {
+  return (
+    <motion.button
+      initial={{ opacity: 0, scale: 0.8, filter: "blur(4px)" }}
+      animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
+      exit={{ opacity: 0, scale: 0.8, filter: "blur(4px)", transition: { duration: 0.12 } }}
+      transition={{ type: "spring", bounce: 0, duration: 0.3 }}
+      onClick={onOpen}
+      aria-label={unread ? `Show chat, ${unread} new` : "Show chat"}
+      className="glass press relative grid size-11 shrink-0 place-items-center rounded-2xl text-fog-100"
+    >
+      <ChatCircleIcon size={21} />
+      <AnimatePresence>
+        {unread > 0 && (
+          <motion.span
+            key="badge"
+            initial={{ scale: 0.4, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={{ scale: 0.4, opacity: 0 }}
+            transition={{ type: "spring", bounce: 0.3, duration: 0.3 }}
+            className="absolute -top-1 -right-1 grid h-5 min-w-5 place-items-center rounded-full bg-ember-500 px-1 text-[11px] font-bold text-ink-950 tabular-nums"
+          >
+            {unread > 9 ? "9+" : unread}
+          </motion.span>
+        )}
+      </AnimatePresence>
+    </motion.button>
   );
 }
 
