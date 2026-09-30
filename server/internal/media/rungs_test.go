@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +20,17 @@ func TestLowRung(t *testing.T) {
 		}
 	}
 	dir := t.TempDir()
+	filmGOP := func(name, bitrate, gop string) string {
+		p := filepath.Join(dir, name)
+		if out, err := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error",
+			"-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=24:duration=24",
+			"-f", "lavfi", "-i", "sine=frequency=440:duration=24",
+			"-c:v", "libx264", "-b:v", bitrate, "-g", gop, "-keyint_min", gop, "-sc_threshold", "0",
+			"-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", p).CombinedOutput(); err != nil {
+			t.Fatalf("make %s: %v %s", name, err, out)
+		}
+		return p
+	}
 	film := func(name, vf, bitrate string) string {
 		p := filepath.Join(dir, name)
 		// Noise makes the encoder spend bits, like real footage; a 2s GOP gives several
@@ -49,13 +61,25 @@ func TestLowRung(t *testing.T) {
 	}
 	orig, _, _ := readPlaylist(filepath.Join(heavy, "stream_v.m3u8"))
 	low, done, err := readPlaylist(filepath.Join(heavy, "stream_l.m3u8"))
-	if err != nil || !done || len(low) != len(orig) || len(orig) < 2 {
-		t.Fatalf("low rung: %d segments (done=%v, %v), original %d", len(low), done, err, len(orig))
+	if err != nil || !done || len(low) == 0 {
+		t.Fatalf("low rung: %d segments (done=%v, %v)", len(low), done, err)
 	}
-	for i := range orig { // cut at the same moments, so players can switch at any boundary
-		if d := low[i] - orig[i]; d > 0.1 || d < -0.1 {
-			t.Fatalf("segment %d: low %.3fs vs original %.3fs", i, low[i], orig[i])
+	// Short segments for fast starts, and every original boundary is one of the rung's.
+	lowStarts := map[int]bool{}
+	at := 0.0
+	for _, d := range low {
+		if d > rungKeyEvery+0.1 {
+			t.Fatalf("low rung segment of %.2fs, want <= %.1fs: %v", d, rungKeyEvery, low)
 		}
+		lowStarts[int(math.Round(at*10))] = true
+		at += d
+	}
+	at = 0
+	for _, d := range orig {
+		if !lowStarts[int(math.Round(at*10))] {
+			t.Fatalf("original boundary at %.3fs isn't a rung boundary\noriginal %v\nlow %v\nkeys %v", at, orig, low, rungKeyframes(orig))
+		}
+		at += d
 	}
 	master, _ := os.ReadFile(filepath.Join(heavy, "index.m3u8"))
 	if strings.Count(string(master), "#EXT-X-STREAM-INF") != 2 || !strings.Contains(string(master), "RESOLUTION=854x480") ||
@@ -83,10 +107,18 @@ func TestLowRung(t *testing.T) {
 		t.Fatal("second run changed the master playlist")
 	}
 
-	// A light film doesn't get one.
+	// A light film with frequent keyframes (2s segments) starts fast already: none.
 	light := prep(2, film("light.mp4", "null", "600k"))
 	s.makeRung(context.Background(), 2)
 	if _, err := os.Stat(filepath.Join(light, "stream_l.m3u8")); !os.IsNotExist(err) {
-		t.Fatal("light film got a low rung")
+		t.Fatal("light, short-GOP film got a low rung")
+	}
+	// A light film with keyframes 10s apart would start slowly: it gets one.
+	slow := prep(3, filmGOP("slow-start.mp4", "600k", "240"))
+	if err := s.makeRung(context.Background(), 3); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(slow, "stream_l.m3u8")); err != nil {
+		t.Fatal("long-GOP film got no fast-start rung")
 	}
 }

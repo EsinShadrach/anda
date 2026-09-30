@@ -74,14 +74,14 @@ export async function attachHls(
     // A film still downloading is an EVENT playlist, which hls.js treats as live and would
     // start at the newest segment. The room decides the position, so start at the top.
     startPosition: 0,
-    // Heavy films also have a 480p rung (server: media/rungs.go). Start by assuming a decent
-    // connection, so most people begin on full quality; hls.js drops to 480p within a
-    // segment or two if theirs can't keep up, and climbs back when it can. (Its default
-    // guess of 0.5 Mbit/s would start everyone low and fill the deep buffer with 480p.)
+    // Fast start: most films also have a 480p rung with a keyframe every 2s (server:
+    // media/rungs.go), so its first segment is ~80-220 KB where the original's can be 1-3 MB.
+    // Start on it (levels are sorted lowest first) and let ABR climb; measured through a
+    // link like the user's: first frame 2.0s -> 0.58s, full quality after ~2.5s.
+    startLevel: 0,
+    // Once it's measuring, assume a decent connection rather than hls.js's 0.5 Mbit/s guess.
     abrEwmaDefaultEstimate: 3_000_000,
     capLevelToPlayerSize: false,
-    // Data saver starts on the lowest level (hls.js sorts levels lowest first).
-    ...(dataSaver ? { startLevel: 0 } : {}),
   });
   // The cap is a property, not a config option, and hls.js resets it when a manifest loads,
   // so it's (re)applied in MANIFEST_PARSED below. startLevel above keeps the first segment
@@ -122,10 +122,25 @@ export async function attachHls(
     report();
   });
   hls.on(Hls.Events.LEVEL_SWITCHED, report);
+  // Seeking somewhere unbuffered (a room jump, a late joiner, a resume): fetch that spot from
+  // the small rung first, then climb (seek 1.8s -> 0.48s in the same measurement). Registered
+  // before attachMedia so it runs before hls.js's own seeking handler.
+  const onSeeking = () => {
+    if (hls.levels.length < 2) return;
+    const t = video.currentTime;
+    for (let i = 0; i < video.buffered.length; i++) {
+      if (video.buffered.start(i) <= t && t < video.buffered.end(i) - 0.5) return;
+    }
+    hls.nextLoadLevel = 0;
+  };
+  video.addEventListener("seeking", onSeeking);
   hls.loadSource(url);
   hls.attachMedia(video);
   return {
-    destroy: () => hls.destroy(),
+    destroy: () => {
+      video.removeEventListener("seeking", onSeeking);
+      hls.destroy();
+    },
     setAudioTrack: (i) => {
       if (i >= 0 && i < hls.audioTracks.length) hls.audioTrack = i;
     },

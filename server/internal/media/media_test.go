@@ -147,9 +147,11 @@ func TestPrepareAndServe(t *testing.T) {
 	mediaDir := filepath.Join(dir, "media")
 	os.MkdirAll(mediaDir, 0o755)
 	clip := func(name string, vcodec ...string) {
-		args := append([]string{"-hide_banner", "-loglevel", "error",
+		args := append([]string{
+			"-hide_banner", "-loglevel", "error",
 			"-f", "lavfi", "-i", "testsrc=size=160x90:rate=24:duration=8",
-			"-f", "lavfi", "-i", "sine=frequency=440:duration=8"}, vcodec...)
+			"-f", "lavfi", "-i", "sine=frequency=440:duration=8",
+		}, vcodec...)
 		if !slices.Contains(vcodec, "-c:a") {
 			args = append(args, "-c:a", "aac")
 		}

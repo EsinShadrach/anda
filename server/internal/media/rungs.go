@@ -20,19 +20,28 @@ import (
 // own connection and switches between them segment by segment; the room's sync is on
 // position, so people on different rungs still watch together.
 //
+// It's also the fast-start path. Video is copied, so the original's segments are as long as
+// its keyframe spacing (often 6-10s, i.e. 1-3 MB before the first frame). The rung has a
+// keyframe every 2s, so its segments are ~2s (~80-220 KB); the player starts and resumes
+// after seeks on it and climbs to full quality within a few seconds. Measured through a
+// link like the user's (150 ms RTT, 17 Mbit/s): first frame 2.0s -> 0.58s, seek 1.8s ->
+// 0.48s, full quality after ~2.5s.
+//
 // One vCPU can't encode in real time for a room, but it can in the background: measured on
-// the VM, 480p encodes at ~3x real time (~40 min of CPU for a 2h film) and comes out around
-// 0.65 Mbit/s. So: only for films whose video is over rungMinKbps (a light release gains
-// little), one film at a time, at the lowest priority, after the film is fully prepared.
-// It shows in Pulse's numbers while it runs; ANDA_LOW_RUNG=off turns it off for benchmarks.
+// the VM, 480p encodes at ~2.5-3x real time (~40-50 min of CPU for a 2h film). So: for HD
+// films that are heavy (video over rungMinKbps) or slow to start (segments longer than
+// rungLongSegment on average), one film at a time, at the lowest priority, after the film is
+// fully prepared. It shows in Pulse's numbers while it runs; ANDA_LOW_RUNG=off turns it off.
 //
 // Files, beside the original (see tracks.go): stream_l.m3u8, init_l.mp4, seg_l_NNNNN.m4s.
 // They're made in .low/ and moved in when complete; only then does index.m3u8 list them.
 
 const (
-	rungMinKbps = 2000 // video bitrate above which a film gets a low rung
-	rungHeight  = 480
-	rungMaxrate = 900 // kbit/s ceiling for the low rung's video
+	rungMinKbps     = 2000 // video bitrate above which a film gets a low rung
+	rungLongSegment = 3.0  // average original segment (s) above which it gets one for fast starts
+	rungKeyEvery    = 2.0  // seconds between the rung's keyframes (= its segment length)
+	rungHeight      = 480
+	rungMaxrate     = 900 // kbit/s ceiling for the low rung's video
 )
 
 // queueRung asks for a film's low rung; makeRung decides whether it needs one.
@@ -91,11 +100,12 @@ func (s *Service) makeRung(ctx context.Context, id int64) error {
 	if err != nil {
 		return err
 	}
-	if kbps < rungMinKbps || h <= rungHeight {
+	avgSeg := total / float64(len(segs))
+	if h <= rungHeight || (kbps < rungMinKbps && avgSeg <= rungLongSegment) {
 		return nil
 	}
 
-	log := s.Log.With("media", id, "video_kbps", int(kbps), "size", fmt.Sprintf("%dx%d", w, h))
+	log := s.Log.With("media", id, "video_kbps", int(kbps), "avg_segment", fmt.Sprintf("%.1fs", avgSeg), "size", fmt.Sprintf("%dx%d", w, h))
 	log.Info("making low-quality copy")
 	start := time.Now()
 	tmp := filepath.Join(dir, ".low")
@@ -105,15 +115,7 @@ func (s *Service) makeRung(ctx context.Context, id int64) error {
 	}
 	defer os.RemoveAll(tmp)
 
-	// Keyframes exactly where the original's segments start, and a segment at each one
-	// (hls_time is shorter than any segment), so both rungs split at the same moments and
-	// a player can switch at any boundary.
-	var keys []string
-	t := 0.0
-	for _, d := range segs[:len(segs)-1] {
-		t += d
-		keys = append(keys, strconv.FormatFloat(t, 'f', 3, 64))
-	}
+	keys := rungKeyframes(segs)
 	args := []string{
 		"-hide_banner", "-loglevel", "error", "-nostdin",
 		"-i", src,
@@ -149,9 +151,6 @@ func (s *Service) makeRung(ctx context.Context, id int64) error {
 	if err != nil || !lowDone || len(lowSegs) == 0 {
 		return fmt.Errorf("low rung playlist incomplete: %v", err)
 	}
-	if len(lowSegs) != len(segs) {
-		log.Warn("low rung segments don't line up with the original", "original", len(segs), "low", len(lowSegs))
-	}
 
 	// Move it in (files first, playlist last), then list it in the master playlist.
 	entries, err := os.ReadDir(tmp)
@@ -180,6 +179,30 @@ func (s *Service) makeRung(ctx context.Context, id int64) error {
 	}
 	log.Info("low-quality copy ready", "took", time.Since(start).Round(time.Second), "low_kbps", int(lowKbps))
 	return nil
+}
+
+// rungKeyframes lists the rung's keyframe times: every original segment boundary (so every
+// switch point of the original is one of the rung's too), plus one every rungKeyEvery seconds
+// in between (so the rung's segments stay small). A segment starts at each keyframe
+// (hls_time is shorter than any gap).
+func rungKeyframes(segs []float64) []string {
+	var keys []string
+	t, next := 0.0, rungKeyEvery
+	// ffmpeg keys the first frame at or after each time; 5 ms early so rounding to three
+	// decimals (3.91667 -> 3.917) can't push it onto the next frame.
+	add := func(at float64) { keys = append(keys, strconv.FormatFloat(at-0.005, 'f', 3, 64)) }
+	for _, d := range segs[:len(segs)-1] {
+		end := t + d
+		for ; next < end-rungKeyEvery/2; next += rungKeyEvery {
+			add(next) // grid points not too close to the coming boundary
+		}
+		add(end)
+		t, next = end, end+rungKeyEvery
+	}
+	for ; next < t+segs[len(segs)-1]-rungKeyEvery/2; next += rungKeyEvery {
+		add(next)
+	}
+	return keys
 }
 
 // readPlaylist returns a media playlist's segment durations and whether it's complete.
