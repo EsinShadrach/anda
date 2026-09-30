@@ -28,7 +28,8 @@ export function RoomView({ code }: { code: string }) {
   const [conn] = useState(() => new RoomConnection(code));
   const view = useSyncExternalStore(conn.subscribe, conn.getSnapshot, conn.getSnapshot);
   const phone = useIsPhone();
-  const [picking, setPicking] = useState(false);
+  // "new": pick any film. "switch": another release of the film on screen, same timestamp.
+  const [picking, setPicking] = useState<"new" | "switch" | null>(null);
 
   useEffect(() => {
     conn.start();
@@ -41,16 +42,24 @@ export function RoomView({ code }: { code: string }) {
   return (
     <div className="fixed inset-0 overflow-hidden bg-ink-950">
       {phone ? (
-        <PhoneLayout view={view} conn={conn} onPick={() => setPicking(true)} />
+        <PhoneLayout view={view} conn={conn} onPick={() => setPicking("new")} onSwitch={() => setPicking("switch")} />
       ) : (
-        <WideLayout view={view} conn={conn} onPick={() => setPicking(true)} />
+        <WideLayout view={view} conn={conn} onPick={() => setPicking("new")} onSwitch={() => setPicking("switch")} />
       )}
       <Library
-        open={picking}
-        onClose={() => setPicking(false)}
-        onPick={(mediaId) => {
-          conn.setMedia(mediaId);
-          setPicking(false);
+        open={picking !== null}
+        current={
+          view.media?.catalog_id
+            ? { id: view.media.catalog_id, name: view.media.title, poster: view.media.poster, year: view.media.year }
+            : undefined
+        }
+        switching={picking === "switch"}
+        switchAt={picking !== null ? conn.targetPosition() : 0}
+        onClose={() => setPicking(null)}
+        onPick={(mediaId, switching) => {
+          if (switching) conn.switchRelease(mediaId);
+          else conn.setMedia(mediaId);
+          setPicking(null);
         }}
       />
       <RoomDialogs view={view} conn={conn} />
@@ -59,15 +68,15 @@ export function RoomView({ code }: { code: string }) {
 }
 
 // Desktop / tablet / landscape: the stage fills the room; header and chat float over it.
-type LayoutProps = { view: View; conn: RoomConnection; onPick: () => void };
+type LayoutProps = { view: View; conn: RoomConnection; onPick: () => void; onSwitch: () => void };
 
-function WideLayout({ view, conn, onPick }: LayoutProps) {
+function WideLayout({ view, conn, onPick, onSwitch }: LayoutProps) {
   return (
     <>
       <div className="absolute inset-y-0 right-[392px] left-0">
-        <Stage view={view} conn={conn} onPick={onPick} />
+        <Stage view={view} conn={conn} onPick={onPick} onSwitch={onSwitch} />
       </div>
-      <RoomHeader view={view} className="absolute top-3 right-[392px] left-3 z-20" />
+      <RoomHeader view={view} conn={conn} className="absolute top-3 right-[392px] left-3 z-20" />
       <aside aria-label="Chat" className="glass-thick absolute top-3 right-3 bottom-3 z-10 flex w-[368px] flex-col overflow-hidden rounded-[24px]">
         <div className="flex h-14 shrink-0 items-center justify-between px-5">
           <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-fog-50">Chat</h2>
@@ -83,7 +92,7 @@ function WideLayout({ view, conn, onPick }: LayoutProps) {
 }
 
 // Phone portrait: 16:9 stage under a floating header; chat is a sheet that drags over it.
-function PhoneLayout({ view, conn, onPick }: LayoutProps) {
+function PhoneLayout({ view, conn, onPick, onSwitch }: LayoutProps) {
   const stageRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
   const [geo, setGeo] = useState({ top: 0, offset: 0 });
@@ -107,11 +116,11 @@ function PhoneLayout({ view, conn, onPick }: LayoutProps) {
     <>
       <div ref={stageRef} className="relative aspect-video w-full pt-[env(safe-area-inset-top)]">
         <div className={`absolute inset-0 transition-opacity duration-300 ${expanded ? "opacity-40" : ""}`}>
-          <Stage view={view} conn={conn} onPick={onPick} compact />
+          <Stage view={view} conn={conn} onPick={onPick} onSwitch={onSwitch} compact />
         </div>
       </div>
       <div ref={headerRef} className="absolute inset-x-2 top-[max(8px,env(safe-area-inset-top))] z-20">
-        <RoomHeader view={view} />
+        <RoomHeader view={view} conn={conn} />
       </div>
       {geo.top > 0 && (
         <ChatSheet top={geo.top} collapsedOffset={geo.offset} expanded={expanded} onExpandedChange={setExpanded}>
@@ -123,9 +132,13 @@ function PhoneLayout({ view, conn, onPick }: LayoutProps) {
 }
 
 // The player once a film is picked; before that, the idle screen.
-function Stage({ view, conn, onPick, compact }: LayoutProps & { compact?: boolean }) {
+function Stage({ view, conn, onPick, onSwitch, compact }: LayoutProps & { compact?: boolean }) {
   if (view.media && view.playback) {
-    return <Player key={view.media.id} view={view} conn={conn} compact={compact} onChangeFilm={onPick} />;
+    // No key per film: the same <video> element carries on across films and release
+    // switches, so a browser that allowed sound once keeps allowing it.
+    return (
+      <Player view={view} conn={conn} compact={compact} onChangeFilm={onPick} onSwitch={view.media.catalog_id ? onSwitch : undefined} />
+    );
   }
   return (
     <Projector variant="stage" className="absolute inset-0">

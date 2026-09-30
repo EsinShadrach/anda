@@ -7,35 +7,70 @@ import (
 	"time"
 
 	"anda/internal/protocol"
+	"anda/internal/rooms"
 )
 
 type fakeMedia struct{}
 
+// Film 9 is one second long, for reaching the end.
 func (fakeMedia) Info(_ context.Context, id int64) (protocol.Media, error) {
-	return protocol.Media{ID: id, Title: "Big Buck Bunny", URL: "/media/" + strconv.FormatInt(id, 10) + "/video"}, nil
+	m := protocol.Media{ID: id, Title: "Big Buck Bunny", URL: "/media/" + strconv.FormatInt(id, 10) + "/video"}
+	if id == 9 {
+		m.Duration = 1
+	}
+	return m, nil
 }
 func (fakeMedia) Touch(context.Context, int64)   {}
 func (fakeMedia) Release(context.Context, int64) {}
 
 // twoInRoom puts rafe (host) and chioma in a room with a film picked.
 func twoInRoom(t *testing.T) (host, guest *client, seq int64) {
+	host, guest, seq, _ = twoInRoomWith(t, 7, nil)
+	return host, guest, seq
+}
+
+// twoInRoomWith is twoInRoom with film id, and a chance to tune the manager's timers
+// before the room exists. It also returns chioma's user id.
+func twoInRoomWith(t *testing.T, film int64, tune func(*rooms.Manager)) (host, guest *client, seq, guestID int64) {
 	e := newEnv(t)
+	if tune != nil {
+		tune(e.rm)
+	}
 	rafe, chioma := e.signup("rafe"), e.signup("chioma")
 	code := e.createRoom(rafe)
 	host, guest = e.dial(rafe), e.dial(chioma)
+	host.hello("")
+	guestID = guest.hello("").UserID
 	for _, c := range []*client{host, guest} {
-		c.hello("")
 		c.send(protocol.TypeJoinRoom, protocol.JoinRoom{Code: code})
 		c.expect(protocol.TypeRoomState, nil)
 	}
-	host.send(protocol.TypeSetMedia, protocol.SetMedia{StreamID: 7})
+	host.send(protocol.TypeSetMedia, protocol.SetMedia{StreamID: film})
 	var u protocol.PlaybackUpdate
 	guest.expect(protocol.TypePlaybackUpdate, &u)
-	if u.Media == nil || u.Media.ID != 7 || u.Want != protocol.WantPaused || u.Position != 0 {
+	if u.Media == nil || u.Media.ID != film || u.Want != protocol.WantPaused || u.Position != 0 {
 		t.Fatalf("set_media: %+v", u)
 	}
 	host.expect(protocol.TypePlaybackUpdate, nil)
-	return host, guest, u.Seq
+	return host, guest, u.Seq, guestID
+}
+
+// playing starts the film and has both report ready; returns the running update.
+func playing(t *testing.T, host, guest *client, seq int64) protocol.PlaybackUpdate {
+	t.Helper()
+	host.send(protocol.TypePlay, protocol.Play{LastSeq: seq})
+	host.update()
+	guest.update()
+	host.send(protocol.TypeBufferReport, protocol.BufferReport{Ahead: 5})
+	host.update()
+	guest.update()
+	guest.send(protocol.TypeBufferReport, protocol.BufferReport{Ahead: 5})
+	guest.update()
+	u := host.update()
+	if u.Want != protocol.WantPlaying || len(u.Blockers) != 0 {
+		t.Fatalf("not running: %+v", u)
+	}
+	return u
 }
 
 // update waits for the next playback_update on c.

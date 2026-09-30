@@ -15,6 +15,10 @@ const (
 	// readyTimeout caps "getting ready" so one slow client can't hold the room forever;
 	// after it they catch up (or block again as buffering if they keep stalling).
 	readyTimeout = 8 * time.Second
+	// switchReadyTimeout is much longer: a newly picked torrent release is prepared from
+	// its start, so it has to download up to the room's position before anyone can play
+	// on. Everyone waits on the same download, so there's no one slow client to cut loose.
+	switchReadyTimeout = 10 * time.Minute
 	// stallGrace: short stalls don't pause the room; the client catches up at up to 1.1x.
 	stallGrace = 3 * time.Second
 	// recoverAhead is how much a buffering client must hold again to stop blocking.
@@ -158,7 +162,7 @@ func (r *Room) mark(now time.Time, by int64, action string) {
 
 // startGettingReady blocks on every connected member until they've buffered, capped by
 // readyTimeout. Used when the room starts playing or jumps somewhere new.
-func (r *Room) startGettingReady(now time.Time) {
+func (r *Room) startGettingReady(now time.Time, timeout time.Duration) {
 	r.pb.readyGen++
 	gen := r.pb.readyGen
 	for uid, m := range r.members {
@@ -169,7 +173,7 @@ func (r *Room) startGettingReady(now time.Time) {
 			r.pb.blockers[uid] = protocol.BlockGettingReady
 		}
 	}
-	time.AfterFunc(readyTimeout, func() {
+	time.AfterFunc(timeout, func() {
 		r.do(func() {
 			if r.pb.readyGen != gen {
 				return
@@ -202,7 +206,7 @@ func (r *Room) play(userID int64, s Sender, in protocol.Play) {
 	}
 	r.pb.reanchor(now)
 	r.pb.want = protocol.WantPlaying
-	r.startGettingReady(now)
+	r.startGettingReady(now, readyTimeout)
 	r.mark(now, userID, protocol.TypePlay)
 	r.publish(now, userID, protocol.TypePlay, false)
 }
@@ -246,7 +250,7 @@ func (r *Room) seek(userID int64, s Sender, in protocol.Seek) {
 	r.pb.pos = max(0, in.Position)
 	r.pb.anchor = now
 	if r.pb.want == protocol.WantPlaying {
-		r.startGettingReady(now)
+		r.startGettingReady(now, readyTimeout)
 	}
 	r.mark(now, userID, protocol.TypeSeek)
 	r.publish(now, userID, protocol.TypeSeek, false)
@@ -279,7 +283,7 @@ func (r *Room) setMedia(userID int64, s Sender, in protocol.SetMedia) {
 		r.pb.pos = in.Position
 		if prev.want == protocol.WantPlaying {
 			r.pb.want = protocol.WantPlaying
-			r.startGettingReady(now)
+			r.startGettingReady(now, switchReadyTimeout)
 		}
 	}
 	r.mark(now, userID, action)

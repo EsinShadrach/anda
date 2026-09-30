@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   ArrowClockwiseIcon,
+  ArrowsClockwiseIcon,
   CloudArrowDownIcon,
+  CloudSlashIcon,
   CornersInIcon,
   CornersOutIcon,
   FilmStripIcon,
@@ -18,19 +20,24 @@ import { PlayerSync } from "@/lib/player-sync";
 import { attachHls } from "@/lib/hls-source";
 import { useProgress } from "@/lib/use-progress";
 import { Spinner } from "@/components/ui/spinner";
+import type { Progress } from "@/lib/api";
 
 const IDLE_MS = 2600;
+const NUDGE_MS = 45_000;
+const ANSWER_MS = 120_000; // the server marks us away if "Still watching?" goes unanswered this long
 
 export function Player({
   view,
   conn,
   compact,
   onChangeFilm,
+  onSwitch,
 }: {
   view: RoomView;
   conn: RoomConnection;
   compact?: boolean; // phone portrait: two-row controls
   onChangeFilm: () => void;
+  onSwitch?: () => void; // another release of this film, same timestamp (Library films only)
 }) {
   const [sync] = useState(() => new PlayerSync(conn));
   const ps = useSyncExternalStore(sync.subscribe, sync.getSnapshot, sync.getSnapshot);
@@ -51,7 +58,16 @@ export function Player({
   const preparing = media.state === "preparing" && progress?.state !== "ready";
   const failed = progress?.state === "failed" || progress?.state === "incompatible";
   const preparedTo = preparing ? (progress?.prepared_seconds ?? 0) : Infinity;
-  const canAttach = !failed && (!preparing || preparedTo >= 12);
+  // Attach once enough exists past where the room is: 12s in from the start, or, after
+  // switching release mid-film, 12s past the room's position (the new copy is prepared
+  // from its start, so it has to catch up first). Once attached, stay attached.
+  const resumeAt = view.lastChange?.action === "switch" ? (view.playback?.position ?? 0) : 0;
+  const [reached, setReached] = useState<number | null>(null);
+  const ready = !preparing || reached === media.id || preparedTo >= resumeAt + 12;
+  useEffect(() => {
+    if (ready) setReached(media.id);
+  }, [ready, media.id]);
+  const canAttach = !failed && ready;
   const duration = media.duration || progress?.duration || (Number.isFinite(ps.duration) ? ps.duration : 0);
   const seek = useCallback(
     (t: number) => conn.seek(Math.min(t, preparing ? Math.max(0, preparedTo - 3) : t)),
@@ -75,6 +91,10 @@ export function Player({
       cleanup?.();
     };
   }, [sync, url, attempt, canAttach]);
+
+  const behind = useFallingBehind(conn, media.id, preparing ? progress : null, view.playback?.want === "playing");
+  const [dismissedBehind, setDismissedBehind] = useState<number | null>(null);
+  const showBehind = behind !== null && dismissedBehind !== media.id && !view.gate;
 
   const wantPlaying = (view.intent?.want ?? view.playback?.want) === "playing";
   const running = view.playback?.want === "playing" && view.blockers.length === 0;
@@ -235,6 +255,28 @@ export function Player({
 
       <Toast view={view} />
 
+      <div className={`pointer-events-none absolute inset-x-0 z-30 flex justify-center px-3 ${compact ? "top-[calc(60px+env(safe-area-inset-top))]" : "bottom-28"}`}>
+        <AnimatePresence mode="wait">
+          {view.stillThere ? (
+            <StillThereCard
+              key="still"
+              askedAt={view.stillThere.at}
+              ended={view.lastChange?.action === "ended"}
+              title={media.title}
+              onHere={() => conn.stillHere()}
+            />
+          ) : showBehind ? (
+            <BehindCard
+              key="behind"
+              rate={behind}
+              host={isHost ? null : (nameOf(view, view.host) ?? "The host")}
+              onSwitch={isHost ? onSwitch : undefined}
+              onDismiss={() => setDismissedBehind(media.id)}
+            />
+          ) : null}
+        </AnimatePresence>
+      </div>
+
       {loadError && (
         <div className="absolute inset-0 z-20 grid place-items-center bg-ink-950/70 backdrop-blur-md">
           <div className="enter flex max-w-[34ch] flex-col items-center gap-3 px-6 text-center">
@@ -270,20 +312,45 @@ export function Player({
                   {isHost ? "Pick another stream." : "The host can pick another stream."}
                 </p>
                 {isHost && (
-                  <button onClick={onChangeFilm} className="glass press mt-1 flex h-11 items-center gap-2 rounded-xl px-4 text-[15px] font-semibold text-fog-50">
+                  <button
+                    onClick={onSwitch && conn.targetPosition() > 5 ? onSwitch : onChangeFilm}
+                    className="glass press mt-1 flex h-11 items-center gap-2 rounded-xl px-4 text-[15px] font-semibold text-fog-50"
+                  >
                     <FilmStripIcon size={18} /> Pick another
                   </button>
                 )}
               </div>
             ) : (
-              <PreparingCard title={media.title} progress={progress} compact={compact} />
+              <PreparingCard title={media.title} progress={progress} compact={compact} resumeAt={resumeAt} />
             )}
           </motion.div>
         )}
       </AnimatePresence>
 
       <AnimatePresence>
-        {canAttach && ps.needsTap && (
+        {canAttach && view.gate && (
+          <motion.button
+            key="gate"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0, transition: { duration: 0.2 } }}
+            onClick={() => sync.rejoin()}
+            className="absolute inset-0 z-20 grid place-items-center bg-ink-950/60 backdrop-blur-md"
+          >
+            <span className="flex flex-col items-center gap-4 px-6 text-center">
+              <span className="press grid size-20 place-items-center rounded-full bg-ember-500 text-ink-950 shadow-[0_12px_40px_-8px_rgb(232_131_74/0.7)] max-sm:size-16">
+                <PlayIcon size={32} weight="fill" className="translate-x-0.5" />
+              </span>
+              <span className="flex flex-col gap-1">
+                <span className="text-lg font-semibold tracking-[-0.02em] text-fog-50">Rejoin</span>
+                <span className="text-[14px] text-fog-300">
+                  The room is at <RoomClock conn={conn} /> {running ? "and still watching" : "and paused"}
+                </span>
+              </span>
+            </span>
+          </motion.button>
+        )}
+        {canAttach && ps.needsTap && !view.gate && (
           <motion.button
             key="tap"
             initial={{ opacity: 0 }}
@@ -313,6 +380,17 @@ function StatusChip({ view, conn, className = "" }: { view: RoomView; conn: Room
   const buffering = view.blockers.filter((b) => b.reason === "buffering");
   const ready = view.blockers.filter((b) => b.reason === "getting_ready");
   const want = view.playback?.want;
+
+  // For a little while after a release switch, offer a nudge in case the new copy's
+  // timing differs (a longer intro, a different cut).
+  const sinceSwitch = view.lastChange?.action === "switch" ? Date.now() - view.lastChange.at : Infinity;
+  const switched = sinceSwitch < NUDGE_MS && view.blockers.length === 0;
+  const [, rerender] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    if (sinceSwitch >= NUDGE_MS) return;
+    const t = setTimeout(rerender, NUDGE_MS - sinceSwitch);
+    return () => clearTimeout(t);
+  }, [sinceSwitch]);
 
   let content: React.ReactNode = null;
   let key = "";
@@ -348,6 +426,29 @@ function StatusChip({ view, conn, className = "" }: { view: RoomView; conn: Room
         <Spinner size={14} className="text-ember-400" /> Getting everyone ready
       </>
     );
+  } else if (switched && (!view.locked || isHost)) {
+    key = "switched";
+    content = (
+      <>
+        {view.lastChange!.by === nameOf(view, view.me) ? "Switched" : `${view.lastChange!.by ?? "The host"} switched`} release. Out of step?
+        {[-5, 5].map((d) => (
+          <button
+            key={d}
+            onClick={() => conn.seek(conn.targetPosition() + d)}
+            aria-label={d < 0 ? "Back 5 seconds" : "Forward 5 seconds"}
+            className="press -my-1 rounded-full bg-white/10 px-2.5 py-1 font-mono text-[12px] font-semibold text-fog-50 tabular-nums hover:bg-white/15"
+          >
+            {d < 0 ? "\u22125s" : "+5s"}
+          </button>
+        ))}
+      </>
+    );
+  } else if (want === "paused" && view.lastChange?.action === "all_away") {
+    key = "all-away";
+    content = <>Paused while everyone was away</>;
+  } else if (want === "paused" && view.lastChange?.action === "ended") {
+    key = "ended";
+    content = <>That&rsquo;s the end</>;
   } else if (want === "paused" && view.lastChange?.action === "pause" && view.lastChange.by) {
     key = `paused-${view.lastChange.by}`;
     content = <>Paused by {view.lastChange.by === nameOf(view, view.me) ? "you" : view.lastChange.by}</>;
@@ -488,15 +589,32 @@ function Scrubber({
   );
 }
 
-function PreparingCard({ title, progress, compact }: { title: string; progress: import("@/lib/api").Progress | null; compact?: boolean }) {
-  const pct = progress && progress.size_bytes ? Math.min(100, (progress.downloaded / progress.size_bytes) * 100) : 0;
+function PreparingCard({
+  title,
+  progress,
+  compact,
+  resumeAt,
+}: {
+  title: string;
+  progress: Progress | null;
+  compact?: boolean;
+  resumeAt: number; // > 0: a switched release catching up to the room's position
+}) {
+  const catchingUp = resumeAt > 12;
+  const pct = catchingUp
+    ? Math.min(100, ((progress?.prepared_seconds ?? 0) / (resumeAt + 12)) * 100)
+    : progress && progress.size_bytes
+      ? Math.min(100, (progress.downloaded / progress.size_bytes) * 100)
+      : 0;
   return (
     <div className={`enter relative flex w-full max-w-[380px] flex-col items-center gap-4 px-6 text-center ${compact ? "gap-2 pt-10" : ""}`}>
       <span className={`grid place-items-center rounded-2xl bg-ember-500/12 text-ember-400 ring-1 ring-ember-500/20 ${compact ? "size-10" : "size-14"}`}>
         <CloudArrowDownIcon size={compact ? 20 : 28} weight="duotone" />
       </span>
       <div className="flex flex-col gap-1">
-        <p className={`font-semibold tracking-[-0.02em] text-fog-50 ${compact ? "text-[16px]" : "text-xl"}`}>Getting {title} ready</p>
+        <p className={`font-semibold tracking-[-0.02em] text-fog-50 ${compact ? "text-[16px]" : "text-xl"}`}>
+          {catchingUp ? `Catching up to ${fmt(resumeAt)}` : `Getting ${title} ready`}
+        </p>
         <p className="text-[13px] text-fog-300">
           {!progress || progress.peers === 0
             ? "Finding people to download it from"
@@ -506,7 +624,13 @@ function PreparingCard({ title, progress, compact }: { title: string; progress: 
       <div className="h-1 w-full max-w-[260px] overflow-hidden rounded-full bg-white/10" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}>
         <div className="h-full rounded-full bg-ember-500 transition-[width] duration-700 ease-out" style={{ width: `${Math.max(2, pct)}%` }} />
       </div>
-      {!compact && <p className="text-[12px] text-fog-600">Playback can start in a few seconds. It keeps downloading while you watch.</p>}
+      {!compact && (
+        <p className="text-[12px] text-fog-600">
+          {catchingUp
+            ? "The new release downloads from its start, so it has to reach this point first. The room waits for it."
+            : "Playback can start in a few seconds. It keeps downloading while you watch."}
+        </p>
+      )}
     </div>
   );
 }
@@ -559,4 +683,140 @@ function fmt(s: number) {
   const m = Math.floor((s % 3600) / 60);
   const sec = Math.floor(s % 60);
   return h ? `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}` : `${m}:${String(sec).padStart(2, "0")}`;
+}
+
+/** The room's position, ticking once a second. */
+function RoomClock({ conn }: { conn: RoomConnection }) {
+  const [, tick] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, []);
+  return <span className="font-mono text-fog-100 tabular-nums">{fmt(conn.targetPosition())}</span>;
+}
+
+function Countdown({ until }: { until: number }) {
+  const [, tick] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, []);
+  return <span className="font-mono tabular-nums">{fmt(Math.max(0, (until - Date.now()) / 1000))}</span>;
+}
+
+const cardMotion = {
+  initial: { opacity: 0, y: 10, scale: 0.97, filter: "blur(6px)" },
+  animate: { opacity: 1, y: 0, scale: 1, filter: "blur(0px)" },
+  exit: { opacity: 0, y: 6, scale: 0.98, filter: "blur(4px)", transition: { duration: 0.15 } },
+  transition: { type: "spring" as const, bounce: 0, duration: 0.35 },
+};
+
+function StillThereCard({ askedAt, ended, title, onHere }: { askedAt: number; ended: boolean; title: string; onHere: () => void }) {
+  return (
+    <motion.div
+      {...cardMotion}
+      role="alertdialog"
+      aria-label={ended ? "End of the film" : "Still watching?"}
+      className="glass-thick pointer-events-auto flex w-full max-w-[400px] items-center gap-4 rounded-2xl p-4"
+    >
+      <div className="min-w-0 flex-1">
+        <p className="text-[15px] font-semibold tracking-[-0.01em] text-fog-50">
+          {ended ? <>That&rsquo;s the end of {title}</> : "Still watching?"}
+        </p>
+        <p className="mt-0.5 text-[13px] leading-snug text-fog-300">
+          {ended ? "Still here? " : "It\u2019s been a while. "}
+          We&rsquo;ll mark you away in <Countdown until={askedAt + ANSWER_MS} />.
+        </p>
+      </div>
+      <button
+        onClick={onHere}
+        autoFocus
+        className="press h-10 shrink-0 rounded-xl bg-ember-500 px-4 text-[14px] font-semibold text-ink-950 hover:bg-ember-400"
+      >
+        I&rsquo;m here
+      </button>
+    </motion.div>
+  );
+}
+
+function BehindCard({
+  rate,
+  host,
+  onSwitch,
+  onDismiss,
+}: {
+  rate: number;
+  host: string | null; // null when we are the host
+  onSwitch?: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <motion.div
+      {...cardMotion}
+      role="status"
+      className="glass-thick pointer-events-auto flex w-full max-w-[440px] items-start gap-3 rounded-2xl p-4"
+    >
+      <CloudSlashIcon size={22} className="mt-0.5 shrink-0 text-ember-400" />
+      <div className="min-w-0 flex-1">
+        <p className="text-[15px] font-semibold tracking-[-0.01em] text-fog-50">The download can&rsquo;t keep up</p>
+        <p className="mt-0.5 text-[13px] leading-snug text-fog-300">
+          {rate > 0 ? `It\u2019s arriving at ${rate.toFixed(1)}\u00d7 the film\u2019s speed, so it will keep stopping. ` : "It has stalled. "}
+          {host === null
+            ? onSwitch
+              ? "Another release can carry on from here."
+              : "Pick another film, or wait for it to catch up."
+            : `${host} can switch to another release.`}
+        </p>
+        <div className="mt-3 flex gap-2">
+          {onSwitch && (
+            <button
+              onClick={onSwitch}
+              className="press flex h-9 items-center gap-1.5 rounded-xl bg-ember-500 px-3.5 text-[14px] font-semibold text-ink-950 hover:bg-ember-400"
+            >
+              <ArrowsClockwiseIcon size={16} weight="bold" /> Switch release
+            </button>
+          )}
+          <button onClick={onDismiss} className="press h-9 rounded-xl bg-white/10 px-3.5 text-[14px] font-semibold text-fog-100 hover:bg-white/15">
+            {host === null ? "Keep waiting" : "OK"}
+          </button>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
+/**
+ * Whether a still-downloading film is falling behind playback, from the progress polls:
+ * returns the prepared-seconds-per-second rate once it's clearly too slow, else null.
+ * "Clearly": over at least 20s the download delivers under 0.9x real time and the
+ * prepared edge is less than 90s ahead of the room.
+ */
+function useFallingBehind(conn: RoomConnection, mediaId: number, progress: Progress | null, playing: boolean): number | null {
+  const samples = useRef<{ t: number; prepared: number }[]>([]);
+  const [rate, setRate] = useState<number | null>(null);
+
+  useEffect(() => {
+    samples.current = [];
+    setRate(null);
+  }, [mediaId]);
+
+  useEffect(() => {
+    if (!progress || progress.state !== "preparing") {
+      setRate(null);
+      return;
+    }
+    const now = Date.now();
+    const list = samples.current;
+    list.push({ t: now, prepared: progress.prepared_seconds });
+    while (list.length > 2 && now - list[1].t >= 45_000) list.shift(); // keep ~45s of history
+    const first = list[0];
+    const span = (now - first.t) / 1000;
+    if (!playing || span < 20) return;
+    const r = (progress.prepared_seconds - first.prepared) / span;
+    const margin = progress.prepared_seconds - conn.targetPosition();
+    // A negative margin with a fast rate is a switched release catching up, not a stall.
+    setRate(r < 0.9 && margin < 90 ? Math.max(0, r) : null);
+  }, [progress, playing, conn]);
+
+  return rate;
 }

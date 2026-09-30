@@ -26,6 +26,8 @@ export type Media = {
   duration?: number;
   poster?: string;
   year?: string;
+  /** The film's catalog entry (Library films): lets the host switch to another release. */
+  catalog_id?: string;
   /** "preparing" while a Library film downloads; poll library.progress until "ready". */
   state?: "ready" | "preparing";
 };
@@ -61,14 +63,25 @@ export type RoomView = {
   blockers: Blocker[];
   locked: boolean;
   seq: number;
-  lastChange: { action: string; by: string | null } | null;
+  lastChange: { action: string; by: string | null; at: number } | null;
   intent: Intent | null;
   toast: { id: number; text: string } | null;
+  /**
+   * Holds our player paused until we tap Rejoin: after the device slept or the tab was
+   * away for a while ("woke"), or after the server marked us away for not answering
+   * "Still watching?" ("idle"). The room carries on meanwhile; nothing autoplays.
+   */
+  gate: "woke" | "idle" | null;
+  /** The server asked "Still watching?" (after hours idle, or at the end of the film). */
+  stillThere: { at: number } | null;
 };
 
 type Envelope = { type: string; v: number; payload?: any };
 
 const TOKEN_KEY = "anda.resume";
+
+// Away longer than this (asleep, tab hidden, socket down) and we come back paused.
+const WAKE_GAP_MS = 30_000;
 
 function readToken(): string {
   try {
@@ -109,6 +122,13 @@ export class RoomConnection {
   private bestRtt = Infinity;
   private pingTimer: ReturnType<typeof setInterval> | undefined;
 
+  // Noticing we were gone: a heartbeat that jumps means the device slept; hidden and
+  // dropped timestamps cover a backgrounded tab and a lost connection.
+  private heartbeat: ReturnType<typeof setInterval> | undefined;
+  private lastBeat = 0;
+  private hiddenAt = 0;
+  private droppedAt = 0;
+
   constructor(code: string) {
     this.view = {
       status: "connecting",
@@ -129,6 +149,8 @@ export class RoomConnection {
       lastChange: null,
       intent: null,
       toast: null,
+      gate: null,
+      stillThere: null,
     };
   }
 
@@ -161,6 +183,21 @@ export class RoomConnection {
 
   setMedia(streamId: number) {
     this.send("set_media", { stream_id: streamId });
+  }
+
+  /** Another release of the same film, carrying on from where the room is. */
+  switchRelease(streamId: number) {
+    this.send("set_media", { stream_id: streamId, position: Math.max(0.1, this.targetPosition()) });
+  }
+
+  hostTransfer(userId: number) {
+    this.send("host_transfer", { user_id: userId });
+  }
+
+  /** "I'm here": answers "Still watching?" and lifts the Rejoin gate. */
+  stillHere() {
+    this.send("still_here");
+    this.set({ stillThere: null, gate: null });
   }
 
   skipWait(userId: number) {
@@ -218,7 +255,29 @@ export class RoomConnection {
 
   start() {
     this.closedByUs = false;
+    this.lastBeat = Date.now();
+    clearInterval(this.heartbeat);
+    this.heartbeat = setInterval(this.beat, 5000);
+    document.addEventListener("visibilitychange", this.onVisibility);
     this.open();
+  }
+
+  private beat = () => {
+    const now = Date.now();
+    if (now - this.lastBeat > WAKE_GAP_MS) this.woke();
+    this.lastBeat = now;
+  };
+
+  private onVisibility = () => {
+    if (document.visibilityState === "hidden") this.hiddenAt = Date.now();
+    else if (this.hiddenAt && Date.now() - this.hiddenAt > WAKE_GAP_MS) this.woke();
+    if (document.visibilityState === "visible") this.hiddenAt = 0;
+  };
+
+  /** We were gone long enough that jumping straight back into the film would startle. */
+  private woke() {
+    // Only if the film is running: a paused room has nothing to jump into.
+    if (this.view.media && !this.view.gate && this.view.playback?.want === "playing") this.set({ gate: "woke" });
   }
 
   /** Leave the room and stop reconnecting (navigating away inside the app). */
@@ -228,6 +287,8 @@ export class RoomConnection {
     clearTimeout(this.noticeTimer);
     clearTimeout(this.toastTimer);
     clearInterval(this.pingTimer);
+    clearInterval(this.heartbeat);
+    document.removeEventListener("visibilitychange", this.onVisibility);
     if (this.ws?.readyState === WebSocket.OPEN) this.send("leave_room");
     this.ws?.close(1000);
     this.ws = null;
@@ -285,6 +346,7 @@ export class RoomConnection {
     ws.onclose = () => {
       if (this.ws !== ws) return;
       this.ws = null;
+      this.droppedAt ||= Date.now();
       if (this.closedByUs || this.view.status === "replaced" || this.view.status === "outdated") return;
       this.scheduleReconnect();
     };
@@ -321,6 +383,8 @@ export class RoomConnection {
           break;
         }
         const history: ChatItem[] = (payload.chat ?? []).map((m: any) => toItem(m, false));
+        if (this.droppedAt && Date.now() - this.droppedAt > WAKE_GAP_MS && payload.media) this.woke();
+        this.droppedAt = 0;
         // Keep our own unsent messages; they'll be echoed or re-sent by the user.
         const pending = this.view.chat.filter((c) => c.kind === "msg" && c.pending);
         this.set({
@@ -335,6 +399,7 @@ export class RoomConnection {
           locked: !!payload.locked,
           seq: payload.seq ?? 0,
           intent: null,
+          stillThere: null, // a fresh join: any earlier question no longer stands
         });
         break;
       }
@@ -347,7 +412,9 @@ export class RoomConnection {
           blockers: blockers ?? [],
           locked: !!locked,
           media: media ?? this.view.media,
-          lastChange: { action, by: by?.username ?? null },
+          // "blockers" is the room adjusting on its own (someone got ready or stalled); keep
+          // the last thing a person did, so e.g. "Paused by" and the switch nudge survive it.
+          lastChange: action === "blockers" ? this.view.lastChange : { action, by: by?.username ?? null, at: Date.now() },
           // Any newer state from the server supersedes what we were showing optimistically.
           intent: null,
         });
@@ -358,6 +425,9 @@ export class RoomConnection {
         this.showToast(rejectionText(payload.reason, payload.action, payload.by?.username));
         break;
       }
+      case "still_there":
+        if (!this.view.gate) this.set({ stillThere: { at: Date.now() } });
+        break;
       case "time_pong": {
         const now = Date.now();
         const rtt = now - payload.client_time;
@@ -392,6 +462,8 @@ export class RoomConnection {
           system = `${username} left`;
         } else if (known) {
           members = members.map((m) => (m.user_id === user_id ? { ...m, status } : m));
+          // Marked away while still connected: we didn't answer "Still watching?".
+          if (user_id === this.view.me && status === "away") this.set({ gate: "idle", stillThere: null });
         } else {
           members = [...members, { user_id, username, status }];
           system = `${username} joined`;

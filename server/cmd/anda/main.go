@@ -66,6 +66,10 @@ func run(log *slog.Logger) error {
 		films.Torrent = torrent.New(u)
 	}
 	roomMgr := rooms.NewManager(db, db, films, log)
+	// How long before an idle viewer is asked "Still watching?" (default 3h; shorter for testing).
+	if d, err := time.ParseDuration(os.Getenv("ANDA_IDLE_AFTER")); err == nil && d > 0 {
+		roomMgr.IdleAfter = d
+	}
 	films.InUse = roomMgr.MediaInUse
 	go films.Run(ctx)
 

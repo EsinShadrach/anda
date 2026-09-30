@@ -23,6 +23,7 @@ import (
 type env struct {
 	srv *httptest.Server
 	t   *testing.T
+	rm  *rooms.Manager
 }
 
 func newEnv(t *testing.T) *env {
@@ -41,7 +42,7 @@ func newEnv(t *testing.T) *env {
 	New(a.UserFromRequest, rm, nil, log).Register(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return &env{srv: srv, t: t}
+	return &env{srv: srv, t: t, rm: rm}
 }
 
 // signup returns the session cookie for a new account.

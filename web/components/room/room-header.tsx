@@ -2,12 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "motion/react";
 import { CaretLeftIcon, CheckIcon, CopyIcon, CrownSimpleIcon } from "@phosphor-icons/react";
-import type { Member, RoomView } from "@/lib/room";
+import type { Member, RoomConnection, RoomView } from "@/lib/room";
 import { Avatar } from "@/components/ui/avatar";
 import { Spinner } from "@/components/ui/spinner";
 
 // Floating glass bar over the stage: out, the room code (tap to invite), who's here.
-export function RoomHeader({ view, className = "" }: { view: RoomView; className?: string }) {
+export function RoomHeader({ view, conn, className = "" }: { view: RoomView; conn: RoomConnection; className?: string }) {
   const router = useRouter();
   return (
     <header className={`flex items-center gap-2 ${className}`}>
@@ -22,7 +22,7 @@ export function RoomHeader({ view, className = "" }: { view: RoomView; className
       <InviteChip code={view.code} />
       <div className="flex-1" />
       <Reconnecting visible={view.status === "reconnecting"} />
-      <MembersButton view={view} />
+      <MembersButton view={view} conn={conn} />
     </header>
   );
 }
@@ -91,7 +91,7 @@ function Reconnecting({ visible }: { visible: boolean }) {
   );
 }
 
-function MembersButton({ view }: { view: RoomView }) {
+function MembersButton({ view, conn }: { view: RoomView; conn: RoomConnection }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const shown = view.members.slice(0, 3);
@@ -142,7 +142,13 @@ function MembersButton({ view }: { view: RoomView }) {
             </p>
             <ul className="flex flex-col">
               {view.members.map((m) => (
-                <MemberRow key={m.user_id} m={m} me={m.user_id === view.me} host={m.user_id === view.host} />
+                <MemberRow
+                  key={m.user_id}
+                  m={m}
+                  me={m.user_id === view.me}
+                  host={m.user_id === view.host}
+                  onMakeHost={view.me === view.host && m.user_id !== view.me ? () => conn.hostTransfer(m.user_id) : undefined}
+                />
               ))}
             </ul>
           </motion.div>
@@ -152,9 +158,17 @@ function MembersButton({ view }: { view: RoomView }) {
   );
 }
 
-function MemberRow({ m, me, host }: { m: Member; me: boolean; host: boolean }) {
+function MemberRow({ m, me, host, onMakeHost }: { m: Member; me: boolean; host: boolean; onMakeHost?: () => void }) {
+  // Handing over can't be undone by us, so it takes a second tap to confirm.
+  const [confirming, setConfirming] = useState(false);
+  useEffect(() => {
+    if (!confirming) return;
+    const t = setTimeout(() => setConfirming(false), 3000);
+    return () => clearTimeout(t);
+  }, [confirming]);
+
   return (
-    <li className="flex h-11 items-center gap-3 rounded-xl px-2.5">
+    <li className="group flex h-11 items-center gap-3 rounded-xl px-2.5">
       <Avatar name={m.username} status={m.status} size={28} />
       <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-fog-100">
         {m.username}
@@ -165,7 +179,19 @@ function MemberRow({ m, me, host }: { m: Member; me: boolean; host: boolean }) {
           <CrownSimpleIcon size={13} weight="fill" /> Host
         </span>
       )}
-      {m.status === "away" && !host && <span className="text-[12px] text-fog-500">Away</span>}
+      {m.status === "away" && !host && <span className="text-[12px] text-fog-500 group-hover:hidden">Away</span>}
+      {onMakeHost && (
+        <button
+          onClick={() => (confirming ? onMakeHost() : setConfirming(true))}
+          className={`press h-7 rounded-lg px-2.5 text-[12px] font-semibold transition-colors ${
+            confirming
+              ? "bg-ember-500 text-ink-950"
+              : "bg-white/8 text-fog-300 hover:bg-white/12 hover:text-fog-50 pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:focus-visible:opacity-100"
+          } ${m.status === "away" ? "pointer-fine:hidden pointer-fine:group-hover:block" : ""}`}
+        >
+          {confirming ? "Hand over" : "Make host"}
+        </button>
+      )}
     </li>
   );
 }

@@ -14,28 +14,43 @@ import {
 import { ApiError, library, type CatalogFilm, type Film, type FilmDetails, type LibraryStream } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 
-type Props = { open: boolean; onClose: () => void; onPick: (mediaId: number) => void };
+type Props = {
+  open: boolean;
+  onClose: () => void;
+  /** switching: the pick is another release of the film on screen, same timestamp. */
+  onPick: (mediaId: number, switching: boolean) => void;
+  /** The Library film on screen, if any: offers its other releases. */
+  current?: CatalogFilm;
+  /** Open straight onto the current film's releases (e.g. the download can't keep up). */
+  switching?: boolean;
+  switchAt?: number;
+};
 
 // The host's Library: films already on the server, free open films, search through the
 // catalog, and each film's playable streams. Picking a stream starts it downloading and
 // puts it on the room's screen straight away (it plays as it arrives).
-export function Library({ open, onClose, onPick }: Props) {
-  return <AnimatePresence>{open && <Sheet onClose={onClose} onPick={onPick} />}</AnimatePresence>;
+export function Library({ open, ...rest }: Props) {
+  return <AnimatePresence>{open && <Sheet {...rest} />}</AnimatePresence>;
 }
 
-function Sheet({ onClose, onPick }: Omit<Props, "open">) {
+function Sheet({ onClose, onPick, current, switching: startSwitching, switchAt = 0 }: Omit<Props, "open">) {
   const [query, setQuery] = useState("");
-  const [film, setFilm] = useState<CatalogFilm | null>(null);
+  const [switching, setSwitching] = useState(!!(startSwitching && current));
+  const [film, setFilm] = useState<CatalogFilm | null>(switching ? current! : null);
+  const open = (f: CatalogFilm | null) => {
+    setSwitching(false);
+    setFilm(f);
+  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      if (film) setFilm(null);
+      if (film && !startSwitching) open(null);
       else onClose();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [film, onClose]);
+  }, [film, onClose, startSwitching]);
 
   return (
     <motion.div
@@ -56,7 +71,14 @@ function Sheet({ onClose, onPick }: Omit<Props, "open">) {
         className="glass-thick relative flex h-[92dvh] w-full flex-col overflow-hidden rounded-t-[28px] sm:h-[min(820px,88dvh)] sm:max-w-[960px] sm:rounded-[28px]"
       >
         {film ? (
-          <FilmView key={film.id} film={film} onBack={() => setFilm(null)} onClose={onClose} onPick={onPick} />
+          <FilmView
+            key={film.id}
+            film={film}
+            onBack={startSwitching ? onClose : () => open(null)}
+            onClose={onClose}
+            onPick={(id) => onPick(id, switching)}
+            switchAt={switching ? switchAt : undefined}
+          />
         ) : (
           <>
             <header className="flex items-center gap-3 p-4 pb-3 sm:p-6 sm:pb-4">
@@ -67,9 +89,20 @@ function Sheet({ onClose, onPick }: Omit<Props, "open">) {
             </header>
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-[max(20px,env(safe-area-inset-bottom))] sm:px-6">
               {query.trim() ? (
-                <Results key="results" query={query.trim()} onOpen={setFilm} />
+                <Results key="results" query={query.trim()} onOpen={open} />
               ) : (
-                <Browse key="browse" onOpen={setFilm} onPick={onPick} />
+                <>
+                  {current && (
+                    <NowShowing
+                      film={current}
+                      onOtherReleases={() => {
+                        setSwitching(true);
+                        setFilm(current);
+                      }}
+                    />
+                  )}
+                  <Browse key="browse" onOpen={open} onPick={(id) => onPick(id, false)} />
+                </>
               )}
             </div>
           </>
@@ -106,6 +139,25 @@ function SearchBox({ value, onChange }: { value: string; onChange: (v: string) =
         </button>
       )}
     </label>
+  );
+}
+
+// The film on screen: a way to its other releases (a better copy, or a faster download),
+// carrying on from the same point.
+function NowShowing({ film, onOtherReleases }: { film: CatalogFilm; onOtherReleases: () => void }) {
+  return (
+    <div className="mb-6 flex items-center gap-3 rounded-2xl bg-white/4 p-3 ring-1 ring-white/6">
+      <div className="w-10 shrink-0 overflow-hidden rounded-md">
+        <PosterImage name={film.name} poster={film.poster} />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-[12px] font-semibold tracking-[0.06em] text-fog-500 uppercase">Now showing</p>
+        <p className="truncate text-[15px] font-semibold text-fog-50">{film.name}</p>
+      </div>
+      <Button variant="glass" onClick={onOtherReleases}>
+        Other releases
+      </Button>
+    </div>
   );
 }
 
@@ -217,11 +269,13 @@ function FilmView({
   onBack,
   onClose,
   onPick,
+  switchAt,
 }: {
   film: CatalogFilm;
   onBack: () => void;
   onClose: () => void;
   onPick: (id: number) => void;
+  switchAt?: number; // set when switching release: the room carries on from here
 }) {
   const [data, setData] = useState<{ meta: FilmDetails; streams: LibraryStream[]; hidden: Record<string, number>; failed?: string[] } | null>(null);
   const [error, setError] = useState(false);
@@ -291,7 +345,15 @@ function FilmView({
         {meta?.description && <p className="mt-4 line-clamp-5 text-[14px] leading-relaxed text-fog-300/90 sm:hidden">{meta.description}</p>}
 
         <section className="mt-7 flex flex-col gap-3">
-          <h3 className="text-[13px] font-semibold tracking-[0.06em] text-fog-500 uppercase">Streams</h3>
+          <h3 className="text-[13px] font-semibold tracking-[0.06em] text-fog-500 uppercase">
+            {switchAt !== undefined ? "Switch release" : "Streams"}
+          </h3>
+          {switchAt !== undefined && (
+            <p className="-mt-1 text-[13px] leading-relaxed text-fog-500">
+              The room carries on from <span className="font-mono text-fog-300 tabular-nums">{clock(switchAt)}</span>. A new release
+              downloads from its start, so the one with the most seeders gets there fastest.
+            </p>
+          )}
           {error ? (
             <LoadError onRetry={() => setAttempt((n) => n + 1)} />
           ) : !data ? (
@@ -467,4 +529,11 @@ function hiddenText(h: Record<string, number>) {
 export function formatSize(bytes: number) {
   const mb = bytes / 1e6;
   return mb >= 1000 ? `${(mb / 1000).toFixed(1)} GB` : `${Math.round(mb)} MB`;
+}
+
+function clock(s: number) {
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = Math.floor(s % 60);
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}` : `${m}:${String(sec).padStart(2, "0")}`;
 }

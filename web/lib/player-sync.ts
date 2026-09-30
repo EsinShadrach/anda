@@ -109,6 +109,12 @@ export class PlayerSync {
     this.video = null;
   }
 
+  /** Rejoin after being away: lift the gate and, from this tap, allow sound again. */
+  rejoin() {
+    this.conn.stillHere();
+    return this.unlock();
+  }
+
   /** Called from a tap: lets the browser play sound, then hands control back to the room. */
   async unlock() {
     const v = this.video;
@@ -191,7 +197,7 @@ export class PlayerSync {
   private desired(view: RoomView): { target: number; running: boolean } {
     const p = view.playback!;
     let target = this.conn.targetPosition();
-    let running = p.want === "playing" && view.blockers.length === 0;
+    let running = p.want === "playing" && view.blockers.length === 0 && !view.gate;
     const i = view.intent;
     if (i && Date.now() - i.at < 2000) {
       // Pause and seek feel instant locally; play waits for everyone to get ready.
@@ -219,6 +225,11 @@ export class PlayerSync {
   private onPlay = () => {
     const view = this.conn.getSnapshot();
     if (!view.playback || this.unlocking || Date.now() - this.selfPlayAt < 1000) return;
+    if (view.gate) {
+      // Pressing play (e.g. in the native iOS player) while held back means "I'm back".
+      this.conn.stillHere();
+      return;
+    }
     const wanted = view.intent?.want ?? view.playback.want;
     if (wanted !== "playing") this.conn.play();
   };
@@ -228,7 +239,7 @@ export class PlayerSync {
     const view = this.conn.getSnapshot();
     // A hidden page's video is paused by the browser (tab switch, phone locked), not by a
     // person: that makes this viewer away, it doesn't pause the room for everyone.
-    if (!v || !view.playback || v.ended || this.unlocking || document.visibilityState === "hidden") return;
+    if (!v || !view.playback || v.ended || this.unlocking || view.gate || document.visibilityState === "hidden") return;
     if (Date.now() - this.selfPauseAt < 1000) return; // ours
     if (this.desired(view).running) this.conn.pause();
   };
@@ -236,7 +247,7 @@ export class PlayerSync {
   private onSeeking = () => {
     const v = this.video;
     const view = this.conn.getSnapshot();
-    if (!v || !view.playback) return;
+    if (!v || !view.playback || view.gate) return;
     const ours = Math.abs(v.currentTime - this.selfSeek.target) < 0.5 && Date.now() - this.selfSeek.at < 2000;
     if (ours) return;
     if (Math.abs(v.currentTime - this.desired(view).target) > SEEK_TOLERANCE) this.conn.seek(v.currentTime);
