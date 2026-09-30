@@ -20,6 +20,9 @@ type Stream struct {
 	SizeBytes int64  `json:"size_bytes,omitempty"`
 	Seeders   int    `json:"seeders,omitempty"`
 	Direct    bool   `json:"direct,omitempty"` // a direct link, not a torrent
+	// Kbps estimates the stream's bitrate from its size and the film's runtime, so the host
+	// can see what a slow connection will struggle with. 0 when either is unknown.
+	Kbps int `json:"kbps,omitempty"`
 
 	hidden    string // why it's filtered out, "" if shown
 	infoHash  string
@@ -116,4 +119,18 @@ func sortStreams(list []Stream) {
 		}
 		return cmp.Compare(a.SizeBytes, b.SizeBytes)
 	})
+}
+
+var runtimeRE = regexp.MustCompile(`(?i)(?:(\d+)\s*h(?:ours?|rs?)?)?\s*(?:(\d+)\s*m(?:in(?:utes?)?)?)?`)
+
+// runtimeMinutes reads Cinemeta's runtime ("101 min", "2h 20min", "1h"); 0 if unknown.
+func runtimeMinutes(s string) float64 {
+	for _, m := range runtimeRE.FindAllStringSubmatch(s, -1) {
+		h, _ := strconv.Atoi(m[1])
+		min, _ := strconv.Atoi(m[2])
+		if h > 0 || min > 0 {
+			return float64(h*60 + min)
+		}
+	}
+	return 0
 }

@@ -105,6 +105,7 @@ export type LibraryStream = {
   size_bytes?: number;
   seeders?: number;
   direct?: boolean; // a direct link rather than a torrent
+  kbps?: number; // estimated bitrate (size / runtime)
 };
 
 export type Progress = {

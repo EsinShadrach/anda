@@ -210,6 +210,7 @@ func (s *Service) prepareTorrent(ctx context.Context, m store.Media, sources []s
 	}
 	s.removeTorrent(m)
 	log.Info("library film ready", "took", time.Since(start).Round(time.Second), "duration", p.Duration)
+	s.queueRung(m.ID)
 	s.evict(ctx, 0, m.ID) // never the film that just arrived
 }
 

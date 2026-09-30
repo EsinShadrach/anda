@@ -177,6 +177,9 @@ func (s *Service) handleStreams(w http.ResponseWriter, r *http.Request) {
 			hidden[st.hidden]++
 			continue
 		}
+		if mins := runtimeMinutes(m.Runtime); mins > 0 && st.SizeBytes > 0 {
+			st.Kbps = int(float64(st.SizeBytes) * 8 / (mins * 60) / 1000)
+		}
 		shown = append(shown, st)
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{

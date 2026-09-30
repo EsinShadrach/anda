@@ -26,8 +26,8 @@ import (
 var containers = map[string]bool{".mp4": true, ".m4v": true, ".mkv": true, ".mov": true, ".webm": true}
 
 // hlsFile is every name a prepared film's directory can hold.
-// Old single-playlist layout, then the per-track layout (see tracks.go).
-var hlsFile = regexp.MustCompile(`^(index\.m3u8|init\.mp4|seg_\d{5}\.m4s|stream_(v|a\d)\.m3u8|init_(v|a\d)\.mp4|seg_(v|a\d)_\d{5}\.m4s|sub_\d{1,2}\.vtt)$`)
+// Old single-playlist layout, then the per-track layout (see tracks.go; "l" is the 480p rung).
+var hlsFile = regexp.MustCompile(`^(index\.m3u8|init\.mp4|seg_\d{5}\.m4s|stream_(v|l|a\d)\.m3u8|init_(v|l|a\d)\.mp4|seg_(v|l|a\d)_\d{5}\.m4s|sub_\d{1,2}\.vtt)$`)
 
 const rescanEvery = 5 * time.Minute
 
@@ -44,9 +44,12 @@ type Service struct {
 	CacheBytes int64
 	// InUse reports films a live room is showing (never evicted).
 	InUse func() map[int64]bool
+	// LowRung makes a background 480p copy of heavy films for slow connections (rungs.go).
+	LowRung bool
 
 	ctx   context.Context
 	queue chan store.Media
+	rungs chan int64
 	tj    torrentJobs
 }
 
@@ -57,6 +60,11 @@ func (s *Service) Run(ctx context.Context) {
 	s.queue = make(chan store.Media, 64)
 	go s.worker(ctx)
 	s.verifyReady(ctx)
+	if s.LowRung {
+		s.rungs = make(chan int64, 256)
+		go s.rungWorker(ctx)
+		go s.queueAllRungs(ctx)
+	}
 	s.resumeTorrents(ctx)
 	t := time.NewTicker(rescanEvery)
 	defer t.Stop()

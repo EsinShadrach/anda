@@ -47,6 +47,17 @@ func TestOutputArgs(t *testing.T) {
 	if got := strings.Join(outputArgs(probe{}, "event"), " "); !strings.Contains(got, "-var_stream_map v:0,name:v ") {
 		t.Errorf("no audio: %s", got)
 	}
+	for title, want := range map[string]string{
+		"GalaxyRG - Spider-Man.Across.The.Spider-Verse.2023.1080p.WEBRip.1600MB.DD5.1.x264-GalaxyRG": "",
+		"Film.2019.720p.BluRay": "",
+		"Commentary":            "Commentary",
+		"English 5.1":           "English 5.1",
+		"Director's commentary": "Director's commentary",
+	} {
+		if got := trackTitle(title); got != want {
+			t.Errorf("trackTitle(%q) = %q, want %q", title, got, want)
+		}
+	}
 	if NormLang("fre") != "fr" || NormLang("ENG") != "en" || NormLang("und") != "" || NormLang("x y") != "" {
 		t.Error("normLang")
 	}

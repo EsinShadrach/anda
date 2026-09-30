@@ -12,6 +12,7 @@ import {
   type Icon,
 } from "@phosphor-icons/react";
 import { REACTIONS, type FloatingReaction, type ReactionKind, type Track } from "@/lib/room";
+import type { Quality } from "@/lib/hls-source";
 
 // --- Reactions ---------------------------------------------------------------------------
 
@@ -138,6 +139,9 @@ export function TracksMenu({
   audio,
   audioIndex,
   onAudio,
+  quality,
+  dataSaver,
+  onDataSaver,
   onOpenChange,
 }: {
   subtitles: Track[];
@@ -150,6 +154,9 @@ export function TracksMenu({
   audio: Track[];
   audioIndex: number;
   onAudio: (i: number) => void;
+  quality: Quality;
+  dataSaver: boolean;
+  onDataSaver: (on: boolean) => void;
   onOpenChange?: (open: boolean) => void; // the player keeps its controls up meanwhile
 }) {
   const [open, setOpen] = useState(false);
@@ -219,6 +226,17 @@ export function TracksMenu({
                   +
                 </NudgeButton>
               </div>
+            )}
+            {quality.heights.length > 1 && (
+              <>
+                <MenuTitle>Quality</MenuTitle>
+                <MenuItem checked={!dataSaver} onClick={() => onDataSaver(false)}>
+                  Auto{quality.current && !dataSaver ? <span className="text-fog-500"> · {quality.current}p now</span> : null}
+                </MenuItem>
+                <MenuItem checked={dataSaver} onClick={() => onDataSaver(true)}>
+                  Data saver <span className="text-fog-500">· {quality.heights[0]}p</span>
+                </MenuItem>
+              </>
             )}
             {audio.length > 1 && (
               <>

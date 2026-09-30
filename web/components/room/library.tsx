@@ -418,6 +418,18 @@ function StreamRow({ stream, starting, disabled, onPlay }: { stream: LibraryStre
         <span className="flex items-center gap-2 text-[12px] text-fog-500">
           <span className="truncate">{stream.source}</span>
           {stream.size_bytes ? <span>· {formatSize(stream.size_bytes)}</span> : null}
+          {stream.kbps ? (
+            <span
+              className={stream.kbps > HEAVY_KBPS ? "text-away" : undefined}
+              title={
+                stream.kbps > HEAVY_KBPS
+                  ? "Needs a fast connection to play smoothly. Slower viewers get a 480p copy once it's made."
+                  : "Estimated bitrate"
+              }
+            >
+              · {(stream.kbps / 1000).toFixed(1)} Mbit/s
+            </span>
+          ) : null}
           {stream.direct ? (
             <span className="inline-flex items-center gap-1" title="Downloads from a web link, not a torrent">
               · <LinkSimpleIcon size={12} /> Direct link
@@ -437,6 +449,9 @@ function StreamRow({ stream, starting, disabled, onPlay }: { stream: LibraryStre
     </div>
   );
 }
+
+// Above this, viewers on slower connections will struggle until the 480p copy exists.
+const HEAVY_KBPS = 4000;
 
 function PosterGrid({ children, className = "" }: { children: React.ReactNode; className?: string }) {
   return <div className={`grid grid-cols-3 gap-x-3 gap-y-5 sm:grid-cols-4 md:grid-cols-5 ${className}`}>{children}</div>;

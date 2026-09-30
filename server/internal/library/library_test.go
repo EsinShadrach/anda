@@ -79,6 +79,14 @@ func TestClassify(t *testing.T) {
 	}
 }
 
+func TestRuntimeMinutes(t *testing.T) {
+	for in, want := range map[string]float64{"101 min": 101, "2h 20min": 140, "1h": 60, "140": 0, "": 0, "90 minutes": 90} {
+		if got := runtimeMinutes(in); got != want {
+			t.Errorf("%q: %v, want %v", in, got, want)
+		}
+	}
+}
+
 func TestCheckURL(t *testing.T) {
 	resolve := func(ips ...string) func(context.Context, string) ([]netip.Addr, error) {
 		return func(context.Context, string) ([]netip.Addr, error) {
@@ -206,6 +214,11 @@ func TestHandlers(t *testing.T) {
 	}
 	if len(st.Streams) != 2 || st.Streams[0].Quality != "1080p" || st.Streams[0].Source != "Fake Streams" || st.Hidden["video"] != 1 || st.Hidden["size"] != 1 {
 		t.Fatalf("streams: %+v hidden: %+v", st.Streams, st.Hidden)
+	}
+
+	// 1.5 GB over the film's 101 minutes.
+	if k := st.Streams[0].Kbps; k < 2000 || k > 2150 {
+		t.Fatalf("bitrate estimate: %d kbit/s", k)
 	}
 
 	// Only a listed, visible stream can be prepared.

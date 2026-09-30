@@ -63,6 +63,8 @@ func run(log *slog.Logger) error {
 		Authenticate: authSvc.UserFromRequest,
 		Log:          log,
 		CacheBytes:   int64(envInt("ANDA_CACHE_GB", 10)) << 30,
+		// Background 480p copies of heavy films; ANDA_LOW_RUNG=off during Pulse benchmarks.
+		LowRung: os.Getenv("ANDA_LOW_RUNG") != "off",
 	}
 	if u := os.Getenv("ANDA_TORRENT_URL"); u != "" { // Stremio's streaming server
 		films.Torrent = torrent.New(u)

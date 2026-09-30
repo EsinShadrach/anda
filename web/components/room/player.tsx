@@ -17,7 +17,7 @@ import {
 } from "@phosphor-icons/react";
 import type { RoomConnection, RoomView } from "@/lib/room";
 import { PlayerSync } from "@/lib/player-sync";
-import { attachHls, type HlsSource } from "@/lib/hls-source";
+import { attachHls, type HlsSource, type Quality } from "@/lib/hls-source";
 import { SubtitleTrack } from "@/lib/subtitles";
 import type { Track } from "@/lib/room";
 import { ReactionButton, ReactionLayer, TracksMenu, type AddonSubtitle, type SubtitleChoice } from "./player-extras";
@@ -83,6 +83,9 @@ export function Player({
   // Each viewer's own audio language: remembered, applied when the film attaches.
   const sourceRef = useRef<HlsSource | null>(null);
   const [audioIndex, setAudioIndex] = useState(0);
+  // Video quality: automatic per connection, or pinned low by the viewer (data saver).
+  const [quality, setQuality] = useState<Quality>({ heights: [], current: null });
+  const [dataSaver, setDataSaver] = useState(() => recall("anda.dataSaver") === "on");
 
   useEffect(() => {
     if (!canAttach) return;
@@ -91,7 +94,12 @@ export function Player({
     setLoadError(null);
     const initialAudio = preferredAudio(media.audio);
     setAudioIndex(initialAudio);
-    attachHls(video, url, (msg) => live && setLoadError(msg), initialAudio).then((src) => {
+    setQuality({ heights: [], current: null });
+    attachHls(video, url, (msg) => live && setLoadError(msg), {
+      initialAudio,
+      dataSaver: recall("anda.dataSaver") === "on",
+      onQuality: (q) => live && setQuality(q),
+    }).then((src) => {
       if (live) sourceRef.current = src;
       else src.destroy();
     });
@@ -105,6 +113,12 @@ export function Player({
     // media.audio belongs to url's film; url changing is what matters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sync, url, attempt, canAttach]);
+
+  const chooseDataSaver = (on: boolean) => {
+    setDataSaver(on);
+    sourceRef.current?.setDataSaver(on);
+    remember("anda.dataSaver", on ? "on" : "off");
+  };
 
   const chooseAudio = (i: number) => {
     sourceRef.current?.setAudioTrack(i);
@@ -145,7 +159,8 @@ export function Player({
     setSub(c);
     remember("anda.subLang", lang ?? (c ? undefined : "off"));
   };
-  const hasTracks = !!media.subtitles?.length || (media.audio?.length ?? 0) > 1 || !!media.catalog_id;
+  const hasTracks =
+    !!media.subtitles?.length || (media.audio?.length ?? 0) > 1 || !!media.catalog_id || quality.heights.length > 1;
 
   const behind = useFallingBehind(conn, media.id, preparing ? progress : null, view.playback?.want === "playing");
   const [dismissedBehind, setDismissedBehind] = useState<number | null>(null);
@@ -312,6 +327,9 @@ export function Player({
                 audio={media.audio ?? []}
                 audioIndex={audioIndex}
                 onAudio={chooseAudio}
+                quality={quality}
+                dataSaver={dataSaver}
+                onDataSaver={chooseDataSaver}
                 onOpenChange={onTracksMenu}
               />
             )}

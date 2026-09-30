@@ -61,7 +61,7 @@ func runProbe(ctx context.Context, path string) (probe, error) {
 	var p probe
 	for _, s := range raw.Streams {
 		info := streamInfo{
-			Codec: s.CodecName, Lang: NormLang(s.Tags.Language), Title: strings.TrimSpace(s.Tags.Title),
+			Codec: s.CodecName, Lang: NormLang(s.Tags.Language), Title: trackTitle(s.Tags.Title),
 			Default: s.Disposition.Default == 1, Forced: s.Disposition.Forced == 1,
 		}
 		switch s.CodecType {
@@ -185,6 +185,7 @@ func (s *Service) prepare(ctx context.Context, m store.Media) {
 		return
 	}
 	log.Info("hls ready", "took", time.Since(start).Round(time.Millisecond), "duration", p.Duration)
+	s.queueRung(m.ID)
 }
 
 func (s *Service) hlsDir(id int64) string {

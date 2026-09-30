@@ -8,6 +8,17 @@ export type HlsSource = {
   /** Choose audio track i (the order of Media.audio). Remembered until the next attach. */
   setAudioTrack: (i: number) => void;
   audioTrack: () => number;
+  /** Data saver: stay on the lowest quality this film has. Off = pick by connection. */
+  setDataSaver: (on: boolean) => void;
+};
+
+/** The film's video qualities (heights, low to high) and the one playing now. */
+export type Quality = { heights: number[]; current: number | null };
+
+export type AttachOptions = {
+  initialAudio?: number;
+  dataSaver?: boolean;
+  onQuality?: (q: Quality) => void;
 };
 
 // Safari's native HLS exposes alternate audio as video.audioTracks.
@@ -18,7 +29,7 @@ export async function attachHls(
   video: HTMLVideoElement,
   url: string,
   onFatal: (msg: string) => void,
-  initialAudio = 0,
+  { initialAudio = 0, dataSaver = false, onQuality }: AttachOptions = {},
 ): Promise<HlsSource> {
   const { default: Hls } = await import("hls.js");
 
@@ -42,6 +53,7 @@ export async function attachHls(
           video.load();
         },
         setAudioTrack: pick,
+        setDataSaver: () => {}, // Safari's native player picks quality itself
         audioTrack: () => {
           const tracks = nativeAudio(video);
           for (let j = 0; tracks && j < tracks.length; j++) if (tracks[j].enabled) return j;
@@ -50,7 +62,7 @@ export async function attachHls(
       };
     }
     onFatal("This browser can't play the film.");
-    return { destroy: () => {}, setAudioTrack: () => {}, audioTrack: () => 0 };
+    return { destroy: () => {}, setAudioTrack: () => {}, audioTrack: () => 0, setDataSaver: () => {} };
   }
 
   const hls = new Hls({
@@ -62,7 +74,29 @@ export async function attachHls(
     // A film still downloading is an EVENT playlist, which hls.js treats as live and would
     // start at the newest segment. The room decides the position, so start at the top.
     startPosition: 0,
+    // Heavy films also have a 480p rung (server: media/rungs.go). Start by assuming a decent
+    // connection, so most people begin on full quality; hls.js drops to 480p within a
+    // segment or two if theirs can't keep up, and climbs back when it can. (Its default
+    // guess of 0.5 Mbit/s would start everyone low and fill the deep buffer with 480p.)
+    abrEwmaDefaultEstimate: 3_000_000,
+    capLevelToPlayerSize: false,
+    // Data saver starts on the lowest level (hls.js sorts levels lowest first).
+    ...(dataSaver ? { startLevel: 0 } : {}),
   });
+  // The cap is a property, not a config option, and hls.js resets it when a manifest loads,
+  // so it's (re)applied in MANIFEST_PARSED below. startLevel above keeps the first segment
+  // low too, so the start level and the cap never disagree.
+  if (process.env.NODE_ENV === "development") (window as unknown as { __hls: unknown }).__hls = hls;
+  const report = () =>
+    onQuality?.({
+      heights: hls.levels.map((l) => l.height).sort((a, b) => a - b),
+      current: hls.currentLevel >= 0 ? (hls.levels[hls.currentLevel]?.height ?? null) : null,
+    });
+  const applySaver = (on: boolean) => {
+    // Levels are sorted by bitrate, lowest first; -1 lets hls.js choose.
+    hls.autoLevelCapping = on ? 0 : -1;
+    if (on && hls.currentLevel > 0) hls.nextLevel = 0; // switch at the next segment
+  };
   let networkRetries = 0;
   let recovered = false;
   hls.on(Hls.Events.ERROR, (_e, data) => {
@@ -84,7 +118,10 @@ export async function attachHls(
   });
   hls.on(Hls.Events.MANIFEST_PARSED, () => {
     if (initialAudio > 0 && initialAudio < hls.audioTracks.length) hls.audioTrack = initialAudio;
+    if (dataSaver) hls.autoLevelCapping = 0;
+    report();
   });
+  hls.on(Hls.Events.LEVEL_SWITCHED, report);
   hls.loadSource(url);
   hls.attachMedia(video);
   return {
@@ -93,5 +130,6 @@ export async function attachHls(
       if (i >= 0 && i < hls.audioTracks.length) hls.audioTrack = i;
     },
     audioTrack: () => Math.max(0, hls.audioTrack),
+    setDataSaver: applySaver,
   };
 }

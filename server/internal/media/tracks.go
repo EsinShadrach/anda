@@ -151,6 +151,10 @@ func (s *Service) readTracks(id int64) (audio, subs []protocol.Track) {
 	}
 	for i := range tf.Subtitles {
 		tf.Subtitles[i].URL = "/media/" + strconv.FormatInt(id, 10) + "/" + tf.Subtitles[i].URL
+		tf.Subtitles[i].Label = trackTitle(tf.Subtitles[i].Label) // films probed before trackTitle
+	}
+	for i := range tf.Audio {
+		tf.Audio[i].Label = trackTitle(tf.Audio[i].Label)
 	}
 	return tf.Audio, tf.Subtitles
 }
@@ -180,4 +184,17 @@ func NormLang(tag string) string {
 		return ""
 	}
 	return tag
+}
+
+// Release groups often stamp the whole release name into every stream's title ("GalaxyRG -
+// Film.2023.1080p.WEBRip.x264"); shown as a track name that's noise. Keep real labels
+// ("Commentary", "English 5.1", "Director's cut"); drop release names.
+var releaseRE = regexp.MustCompile(`(?i)(\bx\.?26[45]\b|\bh\.?26[45]\b|\b\d{3,4}p\b|web-?dl|webrip|blu-?ray|brrip|hdrip|dvdrip|\.(mkv|mp4|avi)\b|\byts\b|rarbg|galaxyrg|\bpsa\b)`)
+
+func trackTitle(t string) string {
+	t = strings.TrimSpace(t)
+	if len(t) > 40 || releaseRE.MatchString(t) || strings.Count(t, ".") >= 3 {
+		return ""
+	}
+	return t
 }
