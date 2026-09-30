@@ -162,8 +162,9 @@ func (s *SQLite) RoomByCode(ctx context.Context, code string) (Room, error) {
 	var r Room
 	var created, active int64
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, code, owner_id, created_at, last_active_at FROM rooms WHERE code = ?`, code).
-		Scan(&r.ID, &r.Code, &r.OwnerID, &created, &active)
+		`SELECT id, code, owner_id, created_at, last_active_at, COALESCE(media_id, 0), media_position
+		 FROM rooms WHERE code = ?`, code).
+		Scan(&r.ID, &r.Code, &r.OwnerID, &created, &active, &r.MediaID, &r.MediaPosition)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Room{}, ErrNotFound
@@ -173,6 +174,12 @@ func (s *SQLite) RoomByCode(ctx context.Context, code string) (Room, error) {
 	r.CreatedAt = time.Unix(created, 0)
 	r.LastActiveAt = time.Unix(active, 0)
 	return r, nil
+}
+
+func (s *SQLite) SaveRoomPlayback(ctx context.Context, id, mediaID int64, position float64) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE rooms SET media_id = NULLIF(?, 0), media_position = ? WHERE id = ?`,
+		mediaID, position, id)
+	return err
 }
 
 func (s *SQLite) TouchRoom(ctx context.Context, id int64, at time.Time) error {

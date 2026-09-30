@@ -1,6 +1,10 @@
 package gateway
 
 import (
+	"anda/internal/store"
+	"context"
+	"encoding/json"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -125,4 +129,77 @@ func TestConnectionIndicator(t *testing.T) {
 	// Recovered, but it stalled a moment ago: fair, not straight back to good.
 	guest.send(protocol.TypeBufferReport, protocol.BufferReport{Ahead: 30})
 	until(protocol.ConnFair)
+}
+
+func TestRoomResumesWhereItLeftOff(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "anda.db")
+	e := newEnvAt(t, dbPath)
+	rafe := e.signup("rafe")
+	code := e.createRoom(rafe)
+	host := e.dial(rafe)
+	host.hello("")
+	host.send(protocol.TypeJoinRoom, protocol.JoinRoom{Code: code})
+	host.expect(protocol.TypeRoomState, nil)
+	// A real media row: the room's saved film references it.
+	db, err := store.OpenSQLite(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	film, err := db.UpsertTorrentMedia(context.Background(), store.TorrentMedia{Title: "Sintel", SourceURL: "https://cdn.example.com/s.mp4"})
+	db.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.send(protocol.TypeSetMedia, protocol.SetMedia{StreamID: film.ID})
+	u := host.update()
+	host.send(protocol.TypeSeek, protocol.Seek{LastSeq: u.Seq, Position: 42})
+	host.update()
+
+	// A server restart: a fresh process on the same database.
+	e2 := newEnvAt(t, dbPath)
+	c := e2.dial(rafe) // sessions live in the database too
+	c.hello("")
+	c.send(protocol.TypeJoinRoom, protocol.JoinRoom{Code: code})
+	var st protocol.RoomState
+	c.expect(protocol.TypeRoomState, &st)
+	if st.Media == nil || st.Media.ID != film.ID || st.Playback == nil || st.Playback.Want != protocol.WantPaused ||
+		st.Playback.Position != 42 || st.LastAction != "resume" {
+		t.Fatalf("resumed room: media=%+v playback=%+v action=%q", st.Media, st.Playback, st.LastAction)
+	}
+}
+
+func TestReactions(t *testing.T) {
+	host, guest, _, _ := twoInRoomWith(t, 7, nil)
+
+	host.send(protocol.TypeReactionSend, protocol.ReactionSend{Kind: "nope"}) // not in the palette: dropped
+	host.send(protocol.TypeReactionSend, protocol.ReactionSend{Kind: "laugh"})
+	var got protocol.Reaction
+	guest.expect(protocol.TypeReaction, &got)
+	if got.Kind != "laugh" || got.By.Username != "rafe" {
+		t.Fatalf("reaction: %+v", got)
+	}
+
+	// A flood: the burst gets through, the rest is dropped (quietly, no error).
+	for range 20 {
+		host.send(protocol.TypeReactionSend, protocol.ReactionSend{Kind: "fire"})
+	}
+	host.send(protocol.TypeChatSend, protocol.ChatSend{Text: "end"}) // marks the end of the flood
+	fires := 0
+	for {
+		var env protocol.Envelope
+		_, data, err := guest.ws.Read(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		json.Unmarshal(data, &env)
+		if env.Type == protocol.TypeReaction {
+			fires++
+		}
+		if env.Type == protocol.TypeChatMessage {
+			break
+		}
+	}
+	if fires < 6 || fires > 8 { // burst of 8, minus the one used above, plus a little refill
+		t.Fatalf("flood let %d through", fires)
+	}
 }

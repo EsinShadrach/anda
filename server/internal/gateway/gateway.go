@@ -261,6 +261,15 @@ func (g *Gateway) readLoop(ctx context.Context, c *conn, sess *session) {
 			}
 			g.rooms.Chat(code, c.user.ID, c, p)
 
+		case protocol.TypeReactionSend:
+			var p protocol.ReactionSend
+			if !decode(c, env, &p) {
+				continue
+			}
+			if code := g.roomOf(sess); code != "" {
+				g.rooms.React(code, c.user.ID, c, p)
+			}
+
 		case protocol.TypeTimePing:
 			var p protocol.TimePing
 			if decode(c, env, &p) {

@@ -26,7 +26,8 @@ import (
 var containers = map[string]bool{".mp4": true, ".m4v": true, ".mkv": true, ".mov": true, ".webm": true}
 
 // hlsFile is every name a prepared film's directory can hold.
-var hlsFile = regexp.MustCompile(`^(index\.m3u8|init\.mp4|seg_\d{5}\.m4s)$`)
+// Old single-playlist layout, then the per-track layout (see tracks.go).
+var hlsFile = regexp.MustCompile(`^(index\.m3u8|init\.mp4|seg_\d{5}\.m4s|stream_(v|a\d)\.m3u8|init_(v|a\d)\.mp4|seg_(v|a\d)_\d{5}\.m4s|sub_\d{1,2}\.vtt)$`)
 
 const rescanEvery = 5 * time.Minute
 
@@ -140,15 +141,16 @@ func (s *Service) Info(ctx context.Context, id int64) (protocol.Media, error) {
 	if err != nil {
 		return protocol.Media{}, err
 	}
-	if m.Status == "ready" && m.HLSState == store.HLSReady {
-		return toProto(m), nil
-	}
+	playable := m.Status == "ready" && m.HLSState == store.HLSReady
 	// A torrent film still being prepared can go on the room's screen right away: players
 	// poll its progress and start once enough of it exists.
-	if m.Source == "torrent" && (m.HLSState == store.HLSPending || m.HLSState == store.HLSRemuxing) {
-		return toProto(m), nil
+	preparing := m.Source == "torrent" && (m.HLSState == store.HLSPending || m.HLSState == store.HLSRemuxing)
+	if !playable && !preparing {
+		return protocol.Media{}, store.ErrNotFound
 	}
-	return protocol.Media{}, store.ErrNotFound
+	pm := toProto(m)
+	pm.Audio, pm.Subtitles = s.readTracks(m.ID)
+	return pm, nil
 }
 
 func (s *Service) handleProgress(w http.ResponseWriter, r *http.Request) {
@@ -243,6 +245,9 @@ func (s *Service) handleHLS(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(name, ".m3u8"):
 		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 		w.Header().Set("Cache-Control", "private, no-cache")
+	case strings.HasSuffix(name, ".vtt"):
+		w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
+		w.Header().Set("Cache-Control", "private, no-cache") // grows while a film downloads
 	case strings.HasSuffix(name, ".m4s"):
 		w.Header().Set("Content-Type", "video/iso.segment")
 		w.Header().Set("Cache-Control", "private, max-age=86400")

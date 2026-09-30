@@ -28,7 +28,13 @@ type env struct {
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
-	db, err := store.OpenSQLite(context.Background(), filepath.Join(t.TempDir(), "anda.db"))
+	return newEnvAt(t, filepath.Join(t.TempDir(), "anda.db"))
+}
+
+// newEnvAt starts a server on an existing database file, e.g. to simulate a restart.
+func newEnvAt(t *testing.T, dbPath string) *env {
+	t.Helper()
+	db, err := store.OpenSQLite(context.Background(), dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}

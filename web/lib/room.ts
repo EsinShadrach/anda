@@ -31,7 +31,17 @@ export type Media = {
   catalog_id?: string;
   /** "preparing" while a Library film downloads; poll library.progress until "ready". */
   state?: "ready" | "preparing";
+  /** Audio languages, in hls.js's order; each viewer picks their own. */
+  audio?: Track[];
+  /** Subtitles built into the release, as WebVTT. */
+  subtitles?: Track[];
 };
+
+export type Track = { lang?: string; label?: string; url?: string; default?: boolean; forced?: boolean };
+
+export const REACTIONS = ["laugh", "love", "wow", "sad", "clap", "fire"] as const;
+export type ReactionKind = (typeof REACTIONS)[number];
+export type FloatingReaction = { id: number; kind: ReactionKind; by: string; self: boolean };
 
 export type PlaybackState = { want: "playing" | "paused"; position: number; rate: number; server_time: number };
 
@@ -75,6 +85,8 @@ export type RoomView = {
   gate: "woke" | "idle" | null;
   /** The server asked "Still watching?" (after hours idle, or at the end of the film). */
   stillThere: { at: number } | null;
+  /** Reactions floating over the film right now (they fade after a few seconds). */
+  reactions: FloatingReaction[];
 };
 
 type Envelope = { type: string; v: number; payload?: any };
@@ -152,6 +164,7 @@ export class RoomConnection {
       toast: null,
       gate: null,
       stillThere: null,
+      reactions: [],
     };
   }
 
@@ -189,6 +202,21 @@ export class RoomConnection {
   /** Another release of the same film, carrying on from where the room is. */
   switchRelease(streamId: number) {
     this.send("set_media", { stream_id: streamId, position: Math.max(0.1, this.targetPosition()) });
+  }
+
+  /** Float a reaction over everyone's film; ours shows at once. */
+  react(kind: ReactionKind) {
+    if (this.view.status !== "open") return;
+    this.send("reaction_send", { kind });
+    const me = this.view.members.find((m) => m.user_id === this.view.me);
+    this.float(kind, me?.username ?? "", true);
+  }
+
+  private reactionSeq = 0;
+  private float(kind: ReactionKind, by: string, self: boolean) {
+    const id = ++this.reactionSeq;
+    this.set({ reactions: [...this.view.reactions.slice(-24), { id, kind, by, self }] });
+    setTimeout(() => this.set({ reactions: this.view.reactions.filter((r) => r.id !== id) }), 3200);
   }
 
   hostTransfer(userId: number) {
@@ -401,6 +429,8 @@ export class RoomConnection {
           seq: payload.seq ?? 0,
           intent: null,
           stillThere: null, // a fresh join: any earlier question no longer stands
+          // Reopened on the film it left off with: say so ("Picked up at 1:12:30").
+          lastChange: payload.last_action === "resume" ? { action: "resume", by: null, at: Date.now() } : this.view.lastChange,
         });
         break;
       }
@@ -426,6 +456,9 @@ export class RoomConnection {
         this.showToast(rejectionText(payload.reason, payload.action, payload.by?.username));
         break;
       }
+      case "reaction":
+        if ((REACTIONS as readonly string[]).includes(payload.kind)) this.float(payload.kind, payload.by?.username ?? "", false);
+        break;
       case "still_there":
         if (!this.view.gate) this.set({ stillThere: { at: Date.now() } });
         break;

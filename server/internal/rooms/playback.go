@@ -2,6 +2,7 @@ package rooms
 
 import (
 	"context"
+	"math"
 	"time"
 
 	"anda/internal/protocol"
@@ -126,6 +127,52 @@ func (r *Room) publish(now time.Time, by int64, action string, withMedia bool) {
 		u.Media = r.pb.media
 	}
 	r.broadcast(protocol.TypePlaybackUpdate, u)
+	r.savePlayback(now, action != "blockers")
+}
+
+// savePlayback records where the room is, so it resumes there next time. Changes a person
+// made are written straight away (they're already rate-limited); a running film is re-saved
+// every 30s from tick, so a crash or restart loses little.
+func (r *Room) savePlayback(now time.Time, changed bool) {
+	var id int64
+	if r.pb.media != nil {
+		id = r.pb.media.ID
+	}
+	pos := r.pb.position(now)
+	if id == r.savedMedia && math.Abs(pos-r.savedPos) < 1 {
+		return
+	}
+	if !changed && id == r.savedMedia && now.Sub(r.savedAt) < 30*time.Second {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := r.m.rooms.SaveRoomPlayback(ctx, r.info.ID, id, pos); err != nil {
+		r.m.log.Warn("save room playback", "room", r.info.Code, "err", err)
+		return
+	}
+	r.savedMedia, r.savedPos, r.savedAt = id, pos, now
+}
+
+// resume puts the room back on the film it left off with, paused where it was. A film
+// that's gone (evicted, deleted) is simply dropped.
+func (r *Room) resume(ctx context.Context) {
+	if r.info.MediaID == 0 {
+		return
+	}
+	m, err := r.m.media.Info(ctx, r.info.MediaID)
+	if err != nil {
+		return
+	}
+	now := time.Now()
+	r.pb.media = &m
+	r.pb.pos = r.info.MediaPosition
+	if m.Duration > 0 && r.pb.pos >= m.Duration-1 {
+		r.pb.pos = 0 // it had finished: start over
+	}
+	r.pb.anchor = now
+	r.pb.lastAt, r.pb.lastAction = now, "resume"
+	r.savedMedia, r.savedPos, r.savedAt = m.ID, r.pb.pos, now
 }
 
 func (r *Room) reject(s Sender, reason, action string, by int64) {

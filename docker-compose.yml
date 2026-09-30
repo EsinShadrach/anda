@@ -15,6 +15,8 @@ services:
       # Extra Stremio stream addons (comma-separated base URLs), set in ~/anda/.env on the VM.
       # The built-in open films work without any.
       ANDA_STREAM_ADDONS: ${ANDA_STREAM_ADDONS:-}
+      # Stremio subtitle addons (comma-separated base URLs), also in ~/anda/.env. None by default.
+      ANDA_SUBTITLE_ADDONS: ${ANDA_SUBTITLE_ADDONS:-}
       # Voice and camera: LiveKit's key and secret are generated into ~/anda/.env by deploy.sh.
       # A relative URL is completed with the page's own host (wss://<host>/livekit, via Caddy).
       ANDA_LIVEKIT_URL: /livekit

@@ -193,7 +193,11 @@ func (s *Service) prepareTorrent(ctx context.Context, m store.Media, sources []s
 		return
 	}
 	start := time.Now()
-	if err := s.remuxLive(ctx, m.ID, src, dir, codecArgs(p)); err != nil {
+	if err := writeTracks(dir, p); err != nil {
+		fail(store.HLSFailed, err)
+		return
+	}
+	if err := s.remuxLive(ctx, m.ID, src, dir, p); err != nil {
 		fail(store.HLSFailed, err)
 		return
 	}
@@ -211,27 +215,18 @@ func (s *Service) prepareTorrent(ctx context.Context, m store.Media, sources []s
 
 // remuxLive runs ffmpeg from the torrent stream into an event playlist, recording how
 // much of the film is prepared from its -progress output.
-func (s *Service) remuxLive(ctx context.Context, id int64, url, dir string, codecs []string) error {
+func (s *Service) remuxLive(ctx context.Context, id int64, url, dir string, p probe) error {
 	args := []string{
 		"-hide_banner", "-loglevel", "error", "-nostdin", "-nostats",
 		// A torrent can stall for a while between pieces; keep waiting rather than give up.
 		"-rw_timeout", "180000000", // µs
 		"-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_on_network_error", "1", "-reconnect_delay_max", "30",
 		"-protocol_whitelist", netProtocols,
-		"-i", url,
-		"-map", "0:v:0", "-map", "0:a:0?",
-	}
-	args = append(args, codecs...)
-	args = append(args,
-		"-f", "hls",
-		"-hls_time", "6",
-		"-hls_playlist_type", "event", // grows while downloading; ENDLIST appended when done
-		"-hls_segment_type", "fmp4",
-		"-hls_fmp4_init_filename", "init.mp4",
-		"-hls_segment_filename", "seg_%05d.m4s",
 		"-progress", "pipe:1",
-		"index.m3u8",
-	)
+		"-i", url,
+	}
+	// "event": the playlists grow while downloading; ENDLIST is appended when done.
+	args = append(args, outputArgs(p, "event")...)
 	name := "ffmpeg"
 	if nice, err := exec.LookPath("nice"); err == nil {
 		name, args = nice, append([]string{"-n", "10", "ffmpeg"}, args...)

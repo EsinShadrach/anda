@@ -17,15 +17,90 @@ import (
 	"anda/internal/store"
 )
 
-func TestCodecArgs(t *testing.T) {
-	if got := strings.Join(codecArgs(probe{AudioCodec: "aac"}), " "); got != "-c copy" {
-		t.Errorf("aac: %s", got)
+func TestOutputArgs(t *testing.T) {
+	p := probe{
+		Audio: []streamInfo{
+			{Index: 0, Codec: "truehd", Lang: "en", Default: true},
+			{Index: 1, Codec: "aac", Lang: "fr"},
+		},
+		Subs: []streamInfo{
+			{Index: 0, Codec: "hdmv_pgs_subtitle", Lang: "en"}, // image-based: skipped
+			{Index: 1, Codec: "subrip", Lang: "es"},
+		},
 	}
-	if got := strings.Join(codecArgs(probe{}), " "); got != "-c copy" {
+	got := strings.Join(outputArgs(p, "vod"), " ")
+	for _, want := range []string{
+		"-map 0:v:0 -map 0:a:0 -map 0:a:1 -c:v copy",
+		"-c:a:0 aac -b:a:0 160k -ac:a:0 2", // TrueHD becomes AAC stereo
+		"-c:a:1 copy",                      // AAC is copied
+		"v:0,agroup:aud,name:v a:0,agroup:aud,name:a0,language:en,default:yes a:1,agroup:aud,name:a1,language:fr",
+		"-master_pl_name index.m3u8",
+		"-map 0:s:1 -c:s webvtt -f webvtt sub_0.vtt",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "0:s:0") {
+		t.Error("image subtitles should be skipped")
+	}
+	if got := strings.Join(outputArgs(probe{}, "event"), " "); !strings.Contains(got, "-var_stream_map v:0,name:v ") {
 		t.Errorf("no audio: %s", got)
 	}
-	if got := strings.Join(codecArgs(probe{AudioCodec: "truehd"}), " "); !strings.Contains(got, "-c:v copy") || !strings.Contains(got, "-c:a aac") {
-		t.Errorf("truehd: %s", got)
+	if NormLang("fre") != "fr" || NormLang("ENG") != "en" || NormLang("und") != "" || NormLang("x y") != "" {
+		t.Error("normLang")
+	}
+}
+
+// A film with two audio languages and subtitles comes out as renditions a player can pick.
+func TestTracksPipeline(t *testing.T) {
+	for _, bin := range []string{"ffmpeg", "ffprobe"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skip(bin + " not installed")
+		}
+	}
+	dir := t.TempDir()
+	srt := filepath.Join(dir, "en.srt")
+	os.WriteFile(srt, []byte("1\n00:00:01,000 --> 00:00:03,000\nHello there\n"), 0o644)
+	src := filepath.Join(dir, "film.mkv")
+	if out, err := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "testsrc=size=160x90:rate=24:duration=8",
+		"-f", "lavfi", "-i", "sine=frequency=440:duration=8", "-f", "lavfi", "-i", "sine=frequency=660:duration=8", "-i", srt,
+		"-map", "0:v", "-map", "1:a", "-map", "2:a", "-map", "3:s",
+		"-c:v", "libx264", "-g", "48", "-pix_fmt", "yuv420p", "-c:a:0", "ac3", "-c:a:1", "aac", "-c:s", "srt",
+		"-metadata:s:a:0", "language=eng", "-metadata:s:a:0", "title=Director", "-metadata:s:a:1", "language=fre",
+		"-metadata:s:s:0", "language=eng", src).CombinedOutput(); err != nil {
+		t.Fatalf("make film: %v %s", err, out)
+	}
+	p, err := runProbe(context.Background(), src)
+	if err != nil || len(p.Audio) != 2 || len(p.Subs) != 1 || p.Audio[0].Lang != "en" || p.Audio[1].Lang != "fr" {
+		t.Fatalf("probe: %+v %v", p, err)
+	}
+	s := &Service{HLSDir: filepath.Join(dir, "hls")}
+	if err := remux(context.Background(), src, s.hlsDir(1), p); err != nil {
+		t.Fatal(err)
+	}
+	master, _ := os.ReadFile(filepath.Join(s.hlsDir(1), "index.m3u8"))
+	for _, want := range []string{`TYPE=AUDIO`, `LANGUAGE="en"`, `LANGUAGE="fr"`, "stream_v.m3u8"} {
+		if !strings.Contains(string(master), want) {
+			t.Fatalf("master playlist missing %s:\n%s", want, master)
+		}
+	}
+	for i, want := range []string{"aac", "aac"} { // AC3 converted, AAC copied
+		out, _ := exec.Command("ffprobe", "-v", "error", "-show_entries", "stream=codec_name", "-of", "csv=p=0",
+			filepath.Join(s.hlsDir(1), "init_a"+strconv.Itoa(i)+".mp4")).Output()
+		if strings.TrimSpace(string(out)) != want {
+			t.Fatalf("audio %d codec: %q", i, out)
+		}
+	}
+	vtt, _ := os.ReadFile(filepath.Join(s.hlsDir(1), "sub_0.vtt"))
+	if !strings.HasPrefix(string(vtt), "WEBVTT") || !strings.Contains(string(vtt), "00:01.000 --> 00:03.000") {
+		t.Fatalf("subtitle:\n%s", vtt)
+	}
+	audio, subs := s.readTracks(1)
+	if len(audio) != 2 || audio[0].Label != "Director" || !audio[0].Default || audio[1].Lang != "fr" ||
+		len(subs) != 1 || subs[0].Lang != "en" || subs[0].URL != "/media/1/sub_0.vtt" {
+		t.Fatalf("tracks: %+v %+v", audio, subs)
 	}
 }
 
@@ -112,8 +187,10 @@ func TestPrepareAndServe(t *testing.T) {
 		t.Fatalf("surround probe: %+v", surround)
 	}
 	out, err := exec.Command("ffprobe", "-v", "error", "-show_entries", "stream=codec_name", "-of", "csv=p=0",
-		filepath.Join(s.hlsDir(surround.ID), "init.mp4")).Output()
-	if err != nil || !strings.Contains(string(out), "aac") || !strings.Contains(string(out), "h264") {
+		filepath.Join(s.hlsDir(surround.ID), "init_a0.mp4")).Output()
+	vout, _ := exec.Command("ffprobe", "-v", "error", "-show_entries", "stream=codec_name", "-of", "csv=p=0",
+		filepath.Join(s.hlsDir(surround.ID), "init_v.mp4")).Output()
+	if err != nil || !strings.Contains(string(out), "aac") || !strings.Contains(string(vout), "h264") {
 		t.Fatalf("surround HLS codecs: %q %v", out, err)
 	}
 	for _, m := range pending {
@@ -148,14 +225,20 @@ func TestPrepareAndServe(t *testing.T) {
 	}
 	base := "/media/" + strconv.FormatInt(good.ID, 10) + "/"
 	code, ct, body := get(base + "index.m3u8")
-	if code != 200 || ct != "application/vnd.apple.mpegurl" || !strings.Contains(body, "#EXT-X-MAP:URI=\"init.mp4\"") || !strings.Contains(body, "seg_00000.m4s") {
-		t.Fatalf("playlist: %d %s\n%s", code, ct, body)
+	if code != 200 || ct != "application/vnd.apple.mpegurl" || !strings.Contains(body, "stream_v.m3u8") {
+		t.Fatalf("master playlist: %d %s\n%s", code, ct, body)
 	}
-	if code, ct, _ := get(base + "seg_00000.m4s"); code != 200 || ct != "video/iso.segment" {
+	code, _, body = get(base + "stream_v.m3u8")
+	if code != 200 || !strings.Contains(body, "#EXT-X-MAP:URI=\"init_v.mp4\"") || !strings.Contains(body, "seg_v_00000.m4s") {
+		t.Fatalf("video playlist: %d\n%s", code, body)
+	}
+	if code, ct, _ := get(base + "seg_v_00000.m4s"); code != 200 || ct != "video/iso.segment" {
 		t.Fatalf("segment: %d %s", code, ct)
 	}
-	if code, _, _ := get(base + "init.mp4"); code != 200 {
-		t.Fatalf("init: %d", code)
+	for _, f := range []string{"init_v.mp4", "stream_a0.m3u8", "init_a0.mp4"} {
+		if code, _, _ := get(base + f); code != 200 {
+			t.Fatalf("%s: %d", f, code)
+		}
 	}
 	for _, bad := range []string{base + "..%2Fanda.db", base + "evil.sh", "/media/999/index.m3u8"} {
 		if code, _, _ := get(bad); code != 404 {

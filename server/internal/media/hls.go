@@ -15,12 +15,15 @@ import (
 	"anda/internal/store"
 )
 
-// probe is what ffprobe says about a file's first video and audio streams.
+// probe is what ffprobe says about a file: its first video stream, every audio and
+// subtitle stream, and the duration.
 type probe struct {
 	VideoCodec string
 	Profile    string
 	PixFmt     string
-	AudioCodec string
+	AudioCodec string // the first audio track's
+	Audio      []streamInfo
+	Subs       []streamInfo
 	Duration   float64
 }
 
@@ -39,10 +42,14 @@ func runProbe(ctx context.Context, path string) (probe, error) {
 	}
 	var raw struct {
 		Streams []struct {
-			CodecType string `json:"codec_type"`
-			CodecName string `json:"codec_name"`
-			Profile   string `json:"profile"`
-			PixFmt    string `json:"pix_fmt"`
+			CodecType   string                           `json:"codec_type"`
+			CodecName   string                           `json:"codec_name"`
+			Profile     string                           `json:"profile"`
+			PixFmt      string                           `json:"pix_fmt"`
+			Tags        struct{ Language, Title string } `json:"tags"`
+			Disposition struct {
+				Default, Forced, Comment int
+			} `json:"disposition"`
 		} `json:"streams"`
 		Format struct {
 			Duration string `json:"duration"`
@@ -53,11 +60,24 @@ func runProbe(ctx context.Context, path string) (probe, error) {
 	}
 	var p probe
 	for _, s := range raw.Streams {
-		switch {
-		case s.CodecType == "video" && p.VideoCodec == "":
-			p.VideoCodec, p.Profile, p.PixFmt = s.CodecName, s.Profile, s.PixFmt
-		case s.CodecType == "audio" && p.AudioCodec == "":
-			p.AudioCodec = s.CodecName
+		info := streamInfo{
+			Codec: s.CodecName, Lang: NormLang(s.Tags.Language), Title: strings.TrimSpace(s.Tags.Title),
+			Default: s.Disposition.Default == 1, Forced: s.Disposition.Forced == 1,
+		}
+		switch s.CodecType {
+		case "video":
+			if p.VideoCodec == "" {
+				p.VideoCodec, p.Profile, p.PixFmt = s.CodecName, s.Profile, s.PixFmt
+			}
+		case "audio":
+			if p.AudioCodec == "" {
+				p.AudioCodec = s.CodecName
+			}
+			info.Index = len(p.Audio)
+			p.Audio = append(p.Audio, info)
+		case "subtitle":
+			info.Index = len(p.Subs)
+			p.Subs = append(p.Subs, info)
 		}
 	}
 	p.Duration, _ = strconv.ParseFloat(raw.Format.Duration, 64)
@@ -66,7 +86,7 @@ func runProbe(ctx context.Context, path string) (probe, error) {
 
 // compatible reports whether browsers can play the video as it is, so no video encoding
 // is needed. One vCPU can't transcode video in real time, so anything else is hidden until
-// the VM grows (plan: "Changes for this VM"). Audio is different: see codecArgs.
+// the VM grows (plan: "Changes for this VM"). Audio is different: see outputArgs.
 func compatible(p probe) (bool, string) {
 	if p.VideoCodec != "h264" {
 		return false, "video is " + orNone(p.VideoCodec) + ", browsers need H.264"
@@ -80,17 +100,6 @@ func compatible(p probe) (bool, string) {
 	return true, ""
 }
 
-// codecArgs copies the video, and copies AAC audio as it is. Any other audio (AC3, E-AC3,
-// DTS, TrueHD, FLAC, Opus...) is converted to AAC stereo: that costs a few percent of a
-// core (measured ~36x real time for 5.1 AC3), unlike video, and it opens up a large share
-// of releases.
-func codecArgs(p probe) []string {
-	if p.AudioCodec == "" || p.AudioCodec == "aac" {
-		return []string{"-c", "copy"}
-	}
-	return []string{"-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-ac", "2"}
-}
-
 func orNone(s string) string {
 	if s == "" {
 		return "missing"
@@ -100,7 +109,7 @@ func orNone(s string) string {
 
 // remux copies the streams into fMP4 HLS segments. It writes to a temp dir and swaps it in
 // only when complete, so a player never sees half a film.
-func remux(ctx context.Context, src, dst string, codecs []string) error {
+func remux(ctx context.Context, src, dst string, p probe) error {
 	tmp := dst + ".tmp"
 	if err := os.RemoveAll(tmp); err != nil {
 		return err
@@ -108,21 +117,10 @@ func remux(ctx context.Context, src, dst string, codecs []string) error {
 	if err := os.MkdirAll(tmp, 0o755); err != nil {
 		return err
 	}
-	args := []string{
-		"-hide_banner", "-loglevel", "error", "-nostdin",
-		"-i", src,
-		"-map", "0:v:0", "-map", "0:a:0?",
+	if err := writeTracks(tmp, p); err != nil {
+		return err
 	}
-	args = append(args, codecs...)
-	args = append(args,
-		"-f", "hls",
-		"-hls_time", "6",
-		"-hls_playlist_type", "vod",
-		"-hls_segment_type", "fmp4",
-		"-hls_fmp4_init_filename", "init.mp4",
-		"-hls_segment_filename", "seg_%05d.m4s",
-		"index.m3u8",
-	)
+	args := append([]string{"-hide_banner", "-loglevel", "error", "-nostdin", "-i", src}, outputArgs(p, "vod")...)
 	name := "ffmpeg"
 	// Low priority: a remux shares the one vCPU with everything else on the VM.
 	if nice, err := exec.LookPath("nice"); err == nil {
@@ -176,7 +174,7 @@ func (s *Service) prepare(ctx context.Context, m store.Media) {
 
 	start := time.Now()
 	rctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
-	err = remux(rctx, src, s.hlsDir(m.ID), codecArgs(p))
+	err = remux(rctx, src, s.hlsDir(m.ID), p)
 	cancel()
 	if err != nil {
 		fail(store.HLSFailed, err)

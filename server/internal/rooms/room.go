@@ -25,6 +25,9 @@ const (
 	// Chat rate limit: a burst of chatBurst, refilling one message per chatRefill.
 	chatBurst  = 5
 	chatRefill = time.Second
+	// Reactions: a burst of reactBurst (a flurry of laughs is fine), then one per reactRefill.
+	reactBurst  = 8
+	reactRefill = 400 * time.Millisecond
 )
 
 type member struct {
@@ -36,6 +39,9 @@ type member struct {
 
 	chatTokens float64
 	chatAt     time.Time
+
+	reactTokens float64
+	reactAt     time.Time
 
 	seekTokens   float64
 	seekAt       time.Time
@@ -64,8 +70,12 @@ type Room struct {
 	host     int64
 	chat     []protocol.ChatMessage
 	lastSave time.Time
-	pb       playback
-	ended    bool // the owner ended it; the goroutine exits after this event
+	// What was last written as where the room left off, and when (see savePlayback).
+	savedMedia int64
+	savedPos   float64
+	savedAt    time.Time
+	pb         playback
+	ended      bool // the owner ended it; the goroutine exits after this event
 }
 
 func newRoom(m *Manager, info store.Room, history []store.ChatMessage) *Room {
@@ -125,6 +135,7 @@ func (r *Room) run() {
 // shutdown removes the room and lets go of its film (a download nobody else is watching
 // can stop: plan, "Empty room: clean up ... including any running transcode or torrent").
 func (r *Room) shutdown() {
+	r.savePlayback(time.Now(), true)
 	r.m.remove(r)
 	close(r.done)
 	if r.pb.media != nil {
@@ -153,6 +164,7 @@ func (r *Room) join(u protocol.User, s Sender) {
 		now := time.Now()
 		mem = &member{user: u, sender: s, status: protocol.StatusOnline, joinedAt: r.joinSeq,
 			chatTokens: chatBurst, chatAt: now, seekTokens: seekBurst, seekAt: now,
+			reactTokens: reactBurst, reactAt: now,
 			reportTokens: reportBurst, reportAt: now, lastAction: now}
 		r.members[u.ID] = mem
 		if r.host == 0 {
@@ -281,7 +293,7 @@ func (r *Room) snapshot() protocol.RoomState {
 	return protocol.RoomState{
 		Code: r.info.Code, Host: r.host, Members: members,
 		Media: r.pb.media, Playback: r.pb.state(time.Now()), Blockers: r.blockerList(),
-		Locked: r.pb.locked, Seq: r.pb.seq, Chat: chat,
+		Locked: r.pb.locked, Seq: r.pb.seq, Chat: chat, LastAction: resumed(r.pb.lastAction),
 	}
 }
 
@@ -336,4 +348,11 @@ func toProtoChat(c store.ChatMessage, clientMsgID string) protocol.ChatMessage {
 		Time:        protocol.UnixMs(c.CreatedAt),
 		ClientMsgID: clientMsgID,
 	}
+}
+
+func resumed(action string) string {
+	if action == "resume" {
+		return action
+	}
+	return ""
 }

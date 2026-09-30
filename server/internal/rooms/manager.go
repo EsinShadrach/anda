@@ -202,6 +202,12 @@ func (m *Manager) Leave(code string, userID int64) {
 	}
 }
 
+func (m *Manager) React(code string, userID int64, s Sender, msg protocol.ReactionSend) {
+	if r := m.get(code); r != nil {
+		r.do(func() { r.react(userID, s, msg) })
+	}
+}
+
 func (m *Manager) Chat(code string, userID int64, s Sender, msg protocol.ChatSend) {
 	r := m.get(code)
 	if r == nil || !r.do(func() { r.sendChat(userID, s, msg) }) {
@@ -295,12 +301,14 @@ func (m *Manager) getOrLoad(ctx context.Context, code string) (*Room, error) {
 		return nil, err
 	}
 
+	r := newRoom(m, info, history)
+	r.resume(ctx) // before the room runs, so no locking needed
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if r := m.live[code]; r != nil {
 		return r, nil // someone else loaded it meanwhile
 	}
-	r := newRoom(m, info, history)
 	m.live[code] = r
 	go r.run()
 	return r, nil

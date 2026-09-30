@@ -34,6 +34,7 @@ const (
 	TypeSkipWait     = "skip_wait"
 	TypeLockControls = "lock_controls"
 	TypeStillHere    = "still_here"
+	TypeReactionSend = "reaction_send"
 	TypeHostTransfer = "host_transfer"
 )
 
@@ -53,6 +54,7 @@ const (
 	TypeActionRejected = "action_rejected"
 	TypeTimePong       = "time_pong"
 	TypeStillThere     = "still_there"
+	TypeReaction       = "reaction"
 )
 
 type Hello struct {
@@ -125,6 +127,8 @@ type RoomState struct {
 	Locked   bool           `json:"locked"`
 	Seq      int64          `json:"seq"`
 	Chat     []ChatMessage  `json:"chat"`
+	// LastAction is "resume" when the room reopened on the film it left off with.
+	LastAction string `json:"last_action,omitempty"`
 }
 
 type Media struct {
@@ -140,6 +144,18 @@ type Media struct {
 	// State is "preparing" while a torrent film is still downloading (its playlist grows;
 	// poll /api/media/{id}/progress), "ready" once complete.
 	State string `json:"state"`
+	// Audio lists the film's audio languages, in the order hls.js reports them; Subtitles its
+	// WebVTT subtitle tracks. Each viewer picks their own; neither affects the room.
+	Audio     []Track `json:"audio,omitempty"`
+	Subtitles []Track `json:"subtitles,omitempty"`
+}
+
+type Track struct {
+	Lang    string `json:"lang,omitempty"`  // ISO 639-1 where known ("en")
+	Label   string `json:"label,omitempty"` // the file's own title for it, e.g. "Commentary"
+	URL     string `json:"url,omitempty"`   // subtitles: the WebVTT file
+	Default bool   `json:"default,omitempty"`
+	Forced  bool   `json:"forced,omitempty"` // subtitles only for foreign-language lines
 }
 
 // PlaybackState anchors the room clock: at ServerTime the film was at Position. While the
@@ -193,6 +209,19 @@ type SetMedia struct {
 	// keeps playing if it was) instead of starting the new film from the top, paused.
 	Position float64 `json:"position,omitempty"`
 }
+
+// Reactions float over the film for everyone; they aren't kept in chat.
+type ReactionSend struct {
+	Kind string `json:"kind"` // one of Reactions
+}
+
+type Reaction struct {
+	By   User   `json:"by"`
+	Kind string `json:"kind"`
+}
+
+// Reactions is the fixed palette; anything else is refused.
+var Reactions = []string{"laugh", "love", "wow", "sad", "clap", "fire"}
 
 type HostTransfer struct {
 	UserID int64 `json:"user_id"`

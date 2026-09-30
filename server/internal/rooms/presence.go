@@ -1,6 +1,7 @@
 package rooms
 
 import (
+	"slices"
 	"time"
 
 	"anda/internal/protocol"
@@ -29,6 +30,9 @@ func (r *Room) stillHere(userID int64) {
 // for hours, and marking the ones who don't answer as away.
 func (r *Room) tick(now time.Time) {
 	p := &r.pb
+	if p.running() {
+		r.savePlayback(now, false)
+	}
 	if p.running() && p.media.Duration > 0 && p.position(now) >= p.media.Duration-0.25 {
 		p.reanchor(now)
 		p.pos = p.media.Duration
@@ -113,4 +117,22 @@ func (r *Room) hostTransfer(userID int64, s Sender, in protocol.HostTransfer) {
 	r.active(r.members[userID])
 	r.host = target.user.ID
 	r.broadcast(protocol.TypeHostChanged, protocol.HostChanged{Host: r.host})
+}
+
+// react floats a reaction over everyone else's screen (the sender shows their own at once).
+// Over the rate limit they're dropped quietly: a reaction isn't worth an error.
+func (r *Room) react(userID int64, s Sender, in protocol.ReactionSend) {
+	mem, ok := r.members[userID]
+	if !ok || !slices.Contains(protocol.Reactions, in.Kind) {
+		return
+	}
+	now := time.Now()
+	mem.reactTokens = min(reactBurst, mem.reactTokens+now.Sub(mem.reactAt).Seconds()/reactRefill.Seconds())
+	mem.reactAt = now
+	if mem.reactTokens < 1 {
+		return
+	}
+	mem.reactTokens--
+	r.active(mem)
+	r.broadcastExcept(s, protocol.TypeReaction, protocol.Reaction{By: mem.user, Kind: in.Kind})
 }

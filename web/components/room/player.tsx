@@ -17,7 +17,10 @@ import {
 } from "@phosphor-icons/react";
 import type { RoomConnection, RoomView } from "@/lib/room";
 import { PlayerSync } from "@/lib/player-sync";
-import { attachHls } from "@/lib/hls-source";
+import { attachHls, type HlsSource } from "@/lib/hls-source";
+import { SubtitleTrack } from "@/lib/subtitles";
+import type { Track } from "@/lib/room";
+import { ReactionButton, ReactionLayer, TracksMenu, type AddonSubtitle, type SubtitleChoice } from "./player-extras";
 import { useProgress } from "@/lib/use-progress";
 import { Spinner } from "@/components/ui/spinner";
 import type { Progress } from "@/lib/api";
@@ -77,23 +80,72 @@ export function Player({
     [conn, preparing, preparedTo],
   );
 
+  // Each viewer's own audio language: remembered, applied when the film attaches.
+  const sourceRef = useRef<HlsSource | null>(null);
+  const [audioIndex, setAudioIndex] = useState(0);
+
   useEffect(() => {
     if (!canAttach) return;
     const video = videoRef.current!;
-    let cleanup: (() => void) | undefined;
     let live = true;
     setLoadError(null);
-    attachHls(video, url, (msg) => live && setLoadError(msg)).then((c) => {
-      if (live) cleanup = c;
-      else c();
+    const initialAudio = preferredAudio(media.audio);
+    setAudioIndex(initialAudio);
+    attachHls(video, url, (msg) => live && setLoadError(msg), initialAudio).then((src) => {
+      if (live) sourceRef.current = src;
+      else src.destroy();
     });
     sync.attach(video);
     return () => {
       live = false;
       sync.detach();
-      cleanup?.();
+      sourceRef.current?.destroy();
+      sourceRef.current = null;
     };
+    // media.audio belongs to url's film; url changing is what matters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sync, url, attempt, canAttach]);
+
+  const chooseAudio = (i: number) => {
+    sourceRef.current?.setAudioTrack(i);
+    setAudioIndex(i);
+    remember("anda.audioLang", media.audio?.[i]?.lang);
+  };
+
+  // Subtitles: one text track on the <video>, each viewer choosing their own.
+  const subsRef = useRef<SubtitleTrack | null>(null);
+  const [sub, setSub] = useState<SubtitleChoice>(null);
+  const [subOffset, setSubOffset] = useState(0);
+  const [addonSubs, setAddonSubs] = useState<AddonSubtitle[] | "loading" | "idle">("idle");
+  useEffect(() => {
+    subsRef.current = new SubtitleTrack(videoRef.current!);
+    return () => subsRef.current?.dispose();
+  }, []);
+  useEffect(() => {
+    // A new film: its own subtitles, in your language if it has them; timing starts at 0.
+    setSubOffset(0);
+    setAddonSubs("idle");
+    const want = recall("anda.subLang");
+    const t = want && want !== "off" ? media.subtitles?.find((s) => s.lang === want && !s.forced) : undefined;
+    setSub(t?.url ? { key: t.url, url: t.url, label: t.lang ?? "" } : null);
+  }, [media.id, media.subtitles]);
+  useEffect(() => {
+    subsRef.current?.show(sub?.url ?? null, preparing);
+  }, [sub?.url, preparing]);
+  useEffect(() => subsRef.current?.setOffset(subOffset), [subOffset]);
+  const loadAddonSubs = useCallback(() => {
+    if (!media.catalog_id || addonSubs !== "idle") return;
+    setAddonSubs("loading");
+    fetch(`/api/library/${encodeURIComponent(media.catalog_id)}/subtitles`)
+      .then((r) => (r.ok ? r.json() : { subtitles: [] }))
+      .then((d) => setAddonSubs(d.subtitles ?? []), () => setAddonSubs([]));
+  }, [media.catalog_id, addonSubs]);
+  const chooseSubtitle = (c: SubtitleChoice, lang?: string) => {
+    if (c && !c.url) c = { ...c, url: `/api/library/${encodeURIComponent(media.catalog_id ?? "")}/subtitles/${c.key}.vtt` };
+    setSub(c);
+    remember("anda.subLang", lang ?? (c ? undefined : "off"));
+  };
+  const hasTracks = !!media.subtitles?.length || (media.audio?.length ?? 0) > 1 || !!media.catalog_id;
 
   const behind = useFallingBehind(conn, media.id, preparing ? progress : null, view.playback?.want === "playing");
   const [dismissedBehind, setDismissedBehind] = useState<number | null>(null);
@@ -170,7 +222,24 @@ export function Player({
     return () => window.removeEventListener("keydown", onKey);
   }, [conn, seek, sync, toggle, toggleFullscreen, wake]);
 
-  const shown = active || !running;
+  // A menu open in the controls keeps them up, film running or not.
+  const [menus, setMenus] = useState({ react: false, tracks: false });
+  const onReactMenu = useCallback((open: boolean) => setMenus((m) => ({ ...m, react: open })), []);
+  const onTracksMenu = useCallback((open: boolean) => setMenus((m) => ({ ...m, tracks: open })), []);
+  const shown = active || !running || menus.react || menus.tracks;
+
+  // Keep subtitles clear of the controls: above them while they show, low when they fade.
+  useEffect(() => {
+    const place = () => {
+      const h = frameRef.current?.clientHeight ?? 0;
+      if (!h) return;
+      const reserve = shown ? (compact ? 92 : 112) : compact ? 12 : 28;
+      subsRef.current?.setLine(Math.max(50, 100 - (reserve / h) * 100));
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [shown, compact]);
 
   return (
     <div
@@ -230,15 +299,31 @@ export function Player({
             {preparing && progress && <DownloadBadge progress={progress} />}
             <span className="ml-3 min-w-0 flex-1 truncate text-[13px] font-medium text-fog-300 max-sm:hidden">{media.title}</span>
             <span className="flex-1 sm:hidden" />
+            <ReactionButton onReact={(k) => conn.react(k)} onOpenChange={onReactMenu} />
+            {hasTracks && (
+              <TracksMenu
+                subtitles={media.subtitles ?? []}
+                addonSubs={media.catalog_id ? (addonSubs === "idle" ? null : addonSubs) : null}
+                loadAddonSubs={media.catalog_id ? loadAddonSubs : undefined}
+                subtitleKey={sub?.key ?? null}
+                onSubtitle={chooseSubtitle}
+                offset={subOffset}
+                onOffset={setSubOffset}
+                audio={media.audio ?? []}
+                audioIndex={audioIndex}
+                onAudio={chooseAudio}
+                onOpenChange={onTracksMenu}
+              />
+            )}
             {isHost && (
               <>
-                <IconButton
+                {!compact && <IconButton
                   label={view.locked ? "Unlock controls for everyone" : "Only I can control playback"}
                   onClick={() => conn.lockControls(!view.locked)}
                   active={view.locked}
                 >
                   {view.locked ? <LockSimpleIcon size={20} weight="fill" /> : <LockSimpleOpenIcon size={20} />}
-                </IconButton>
+                </IconButton>}
                 <IconButton label="Change film" onClick={onChangeFilm}>
                   <FilmStripIcon size={20} />
                 </IconButton>
@@ -255,6 +340,8 @@ export function Player({
           </div>
         </div>
       </div>
+
+      <ReactionLayer reactions={view.reactions} />
 
       <Toast view={view} />
 
@@ -446,6 +533,9 @@ function StatusChip({ view, conn, className = "" }: { view: RoomView; conn: Room
         ))}
       </>
     );
+  } else if (want === "paused" && view.lastChange?.action === "resume") {
+    key = "resume";
+    content = <>Picked up where you left off, at {fmt(view.playback?.position ?? 0)}</>;
   } else if (want === "paused" && view.lastChange?.action === "all_away") {
     key = "all-away";
     content = <>Paused while everyone was away</>;
@@ -830,4 +920,30 @@ function useFallingBehind(conn: RoomConnection, mediaId: number, progress: Progr
   }, [progress, playing, conn]);
 
   return rate;
+}
+
+// The audio track to start on: your last choice of language if this film has it, else the
+// release's default.
+function preferredAudio(audio: Track[] | undefined): number {
+  if (!audio?.length) return 0;
+  const want = recall("anda.audioLang");
+  const mine = want ? audio.findIndex((a) => a.lang === want) : -1;
+  if (mine >= 0) return mine;
+  return Math.max(0, audio.findIndex((a) => a.default));
+}
+
+function remember(key: string, value: string | undefined) {
+  try {
+    if (value) localStorage.setItem(key, value);
+  } catch {
+    // storage blocked: not remembered
+  }
+}
+
+function recall(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
 }

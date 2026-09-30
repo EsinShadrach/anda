@@ -77,9 +77,11 @@ func run(log *slog.Logger) error {
 	lib := &library.Service{
 		Catalog:      env("ANDA_CATALOG_ADDON", "https://v3-cinemeta.strem.io"),
 		StreamAddons: splitList(os.Getenv("ANDA_STREAM_ADDONS")),
-		Media:        films,
-		Authenticate: authSvc.UserFromRequest,
-		Log:          log,
+		// Stremio subtitle addons (comma-separated base URLs). None by default.
+		SubtitleAddons: splitList(os.Getenv("ANDA_SUBTITLE_ADDONS")),
+		Media:          films,
+		Authenticate:   authSvc.UserFromRequest,
+		Log:            log,
 	}
 	// Extra WebSocket origins, e.g. "localhost:3000" for the Next dev server.
 	var origins []string

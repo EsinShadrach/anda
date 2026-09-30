@@ -50,6 +50,9 @@ type Room struct {
 	OwnerID      int64
 	CreatedAt    time.Time
 	LastActiveAt time.Time
+	// Where it left off: the film on screen (0 if none) and its position in seconds.
+	MediaID       int64
+	MediaPosition float64
 }
 
 type ChatMessage struct {
@@ -66,6 +69,8 @@ type Rooms interface {
 	CreateRoom(ctx context.Context, code string, ownerID int64) (Room, error)
 	RoomByCode(ctx context.Context, code string) (Room, error)
 	TouchRoom(ctx context.Context, id int64, at time.Time) error
+	// SaveRoomPlayback records the film on screen (0 for none) and its position.
+	SaveRoomPlayback(ctx context.Context, id, mediaID int64, position float64) error
 	// DeleteRoom removes the room with its chat and member history.
 	DeleteRoom(ctx context.Context, id int64) error
 

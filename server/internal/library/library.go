@@ -30,17 +30,21 @@ type Preparer interface {
 type Service struct {
 	Catalog      string   // catalog addon base URL, e.g. https://v3-cinemeta.strem.io
 	StreamAddons []string // stream addon base URLs; the built-in open films are always included
-	Media        Preparer
-	Authenticate func(*http.Request) (store.User, error)
-	Log          *slog.Logger
+	// SubtitleAddons are Stremio subtitle addon base URLs (e.g. OpenSubtitles); none by default.
+	SubtitleAddons []string
+	Media          Preparer
+	Authenticate   func(*http.Request) (store.User, error)
+	Log            *slog.Logger
 
 	addons *addonClient
 	lookup func(ctx context.Context, host string) ([]netip.Addr, error) // DNS for checkURL; nil = system resolver
+	fetch  func(ctx context.Context, url string) ([]byte, error)        // subtitle download; nil = fetchPublic
 
 	mu      sync.Mutex
 	metas   map[string]cached[Meta]
 	streams map[string]cached[streamSet] // by catalog ID: the full list, hidden ones included
 	names   map[string]string            // addon base → display name
+	subs    subCache
 }
 
 type cached[T any] struct {
@@ -56,6 +60,8 @@ func (s *Service) init() {
 		s.metas = map[string]cached[Meta]{}
 		s.streams = map[string]cached[streamSet]{}
 		s.names = map[string]string{}
+		s.subs.lists = map[string]cached[[]SubtitleOption]{}
+		s.subs.files = map[string][]byte{}
 	}
 }
 
@@ -64,6 +70,8 @@ func (s *Service) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/library/search", s.handleSearch)
 	mux.HandleFunc("GET /api/library/{id}/streams", s.handleStreams)
 	mux.HandleFunc("POST /api/library/{id}/streams/{key}/prepare", s.handlePrepare)
+	mux.HandleFunc("GET /api/library/{id}/subtitles", s.handleSubtitles)
+	mux.HandleFunc("GET /api/library/{id}/subtitles/{file}", s.handleSubtitleFile)
 }
 
 // Film is a search result.

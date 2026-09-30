@@ -114,7 +114,7 @@ func TestTorrentPrepareAndEvict(t *testing.T) {
 	if ready.Status != "ready" || ready.Source != "torrent" || ready.VideoCodec != "h264" || ready.Duration < 13 {
 		t.Fatalf("ready film: %+v", ready)
 	}
-	playlist, _ := os.ReadFile(filepath.Join(s.hlsDir(m.ID), "index.m3u8"))
+	playlist, _ := os.ReadFile(filepath.Join(s.hlsDir(m.ID), "stream_v.m3u8"))
 	if !strings.Contains(string(playlist), "#EXT-X-PLAYLIST-TYPE:EVENT") || !strings.Contains(string(playlist), "#EXT-X-ENDLIST") {
 		t.Fatalf("finished event playlist should be closed:\n%s", playlist)
 	}
