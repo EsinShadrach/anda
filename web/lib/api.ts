@@ -122,7 +122,7 @@ export const library = {
   search: (q: string, signal?: AbortSignal) =>
     requestWith<{ films: CatalogFilm[] }>(`/api/library/search?q=${encodeURIComponent(q)}`, signal).then((r) => r.films),
   streams: (id: string, signal?: AbortSignal) =>
-    requestWith<{ meta: FilmDetails; streams: LibraryStream[]; hidden: Record<string, number> }>(
+    requestWith<{ meta: FilmDetails; streams: LibraryStream[]; hidden: Record<string, number>; failed?: string[] }>(
       `/api/library/${encodeURIComponent(id)}/streams`,
       signal,
     ),

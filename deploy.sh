@@ -16,7 +16,7 @@ echo "==> next build"
 
 echo "==> sync"
 rsync -az --delete -e "ssh -i $KEY" \
-  --exclude .git --exclude node_modules --exclude .next --exclude .env --exclude '*.db*' \
+  --exclude .git --exclude .claude --exclude node_modules --exclude .next --exclude .env --exclude '*.db*' \
   ./ "$HOST:~/anda/"
 
 $SSH 'cd ~/anda && \

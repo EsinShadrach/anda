@@ -7,6 +7,7 @@ package library
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -64,19 +65,46 @@ func newAddonClient() *addonClient {
 	return &addonClient{http: &http.Client{Timeout: 10 * time.Second}}
 }
 
+// userAgent identifies Anda honestly. Some addons sit behind bot filtering that rejects
+// Go's default "Go-http-client/1.1" with a 403.
+const userAgent = "Anda/1.0 (Stremio addon client)"
+
+// get fetches JSON from an addon, retrying once on a network error or 5xx (addons are
+// often small free hosts that hiccup).
 func (c *addonClient) get(ctx context.Context, base, path string, v any) error {
+	err := c.getOnce(ctx, base, path, v)
+	var se statusError
+	if err != nil && ctx.Err() == nil && (!errors.As(err, &se) || se.code >= 500) {
+		select {
+		case <-ctx.Done():
+		case <-time.After(400 * time.Millisecond):
+			err = c.getOnce(ctx, base, path, v)
+		}
+	}
+	return err
+}
+
+type statusError struct {
+	code int
+	msg  string
+}
+
+func (e statusError) Error() string { return e.msg }
+
+func (c *addonClient) getOnce(ctx context.Context, base, path string, v any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(base, "/")+path, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", userAgent)
 	res, err := c.http.Do(req)
 	if err != nil {
 		return err
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s%s: %s", base, path, res.Status)
+		return statusError{res.StatusCode, fmt.Sprintf("%s%s: %s", base, path, res.Status)}
 	}
 	return json.NewDecoder(http.MaxBytesReader(nil, res.Body, 8<<20)).Decode(v)
 }
@@ -103,6 +131,10 @@ func (c *addonClient) streams(ctx context.Context, base, id string) ([]AddonStre
 		Streams []AddonStream `json:"streams"`
 	}
 	err := c.get(ctx, base, "/stream/movie/"+url.PathEscape(id)+".json", &out)
+	var se statusError
+	if errors.As(err, &se) && se.code == http.StatusNotFound {
+		return nil, nil // the addon doesn't have this film: no streams, not a failure
+	}
 	return out.Streams, err
 }
 

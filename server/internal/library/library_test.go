@@ -67,6 +67,8 @@ func TestHandlers(t *testing.T) {
 	// One fake addon serving both the catalog and streams, like Cinemeta + a stream addon.
 	addon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.Header.Get("User-Agent") != userAgent:
+			http.Error(w, "bots go away", http.StatusForbidden)
 		case r.URL.Path == "/manifest.json":
 			w.Write([]byte(`{"name":"Fake Streams"}`))
 		case strings.HasPrefix(r.URL.Path, "/catalog/movie/top/search="):
@@ -146,6 +148,25 @@ func TestHandlers(t *testing.T) {
 	}
 	if prep.got == nil || prep.got.InfoHash != "2222222222222222222222222222222222222222" || prep.got.FileIdx != 1 || prep.got.Title != "Some Film" {
 		t.Fatalf("prepared: %+v", prep.got)
+	}
+
+	// A source that refuses is named, not silently empty; the rest still answer.
+	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/manifest.json" {
+			w.Write([]byte(`{"name":"Broken Source"}`))
+			return
+		}
+		http.Error(w, "nope", http.StatusForbidden)
+	}))
+	defer broken.Close()
+	s.StreamAddons = append(s.StreamAddons, broken.URL)
+	var st2 struct {
+		Streams []Stream
+		Failed  []string
+	}
+	call("GET", "/api/library/tt1254207/streams", &st2)
+	if len(st2.Failed) != 1 || st2.Failed[0] != "Broken Source" || len(st2.Streams) != 1 {
+		t.Fatalf("failed source: %+v", st2)
 	}
 
 	// The built-in open films answer without any addon.

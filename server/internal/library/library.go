@@ -37,8 +37,8 @@ type Service struct {
 
 	mu      sync.Mutex
 	metas   map[string]cached[Meta]
-	streams map[string]cached[[]Stream] // by catalog ID: the full list, hidden ones included
-	names   map[string]string           // addon base → display name
+	streams map[string]cached[streamSet] // by catalog ID: the full list, hidden ones included
+	names   map[string]string            // addon base → display name
 }
 
 type cached[T any] struct {
@@ -52,7 +52,7 @@ func (s *Service) init() {
 	if s.addons == nil {
 		s.addons = newAddonClient()
 		s.metas = map[string]cached[Meta]{}
-		s.streams = map[string]cached[[]Stream]{}
+		s.streams = map[string]cached[streamSet]{}
 		s.names = map[string]string{}
 	}
 }
@@ -159,10 +159,10 @@ func (s *Service) handleStreams(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	all := s.streamList(r.Context(), id)
+	set := s.streamList(r.Context(), id)
 	shown := []Stream{}
 	hidden := map[string]int{}
-	for _, st := range all {
+	for _, st := range set.streams {
 		if st.hidden != "" {
 			hidden[st.hidden]++
 			continue
@@ -175,7 +175,8 @@ func (s *Service) handleStreams(w http.ResponseWriter, r *http.Request) {
 			Description: m.Description, Runtime: m.Runtime, Genres: m.Genres,
 		},
 		"streams": shown,
-		"hidden":  hidden, // reason → count: video | audio | size | not a torrent
+		"hidden":  hidden,                            // reason → count: video | audio | size | not a torrent
+		"failed":  append([]string{}, set.failed...), // sources that didn't answer
 	})
 }
 
@@ -186,7 +187,7 @@ func (s *Service) handlePrepare(w http.ResponseWriter, r *http.Request) {
 	id, key := r.PathValue("id"), r.PathValue("key")
 	// Only streams we listed ourselves: a client can't make the server fetch an arbitrary torrent.
 	var pick *Stream
-	for _, st := range s.streamList(r.Context(), id) {
+	for _, st := range s.streamList(r.Context(), id).streams {
 		if st.Key == key && st.hidden == "" {
 			pick = &st
 			break
@@ -229,13 +230,20 @@ func stateOf(m store.Media) string {
 // streamList returns every stream for a film from the built-in source and each stream
 // addon (queried in parallel), classified and sorted. The full list is kept, as the plan
 // asks, so another source can be picked later.
-func (s *Service) streamList(ctx context.Context, id string) []Stream {
+// streamSet is every stream found for a film, plus the sources that failed to answer.
+type streamSet struct {
+	streams []Stream
+	failed  []string // addon names
+}
+
+func (s *Service) streamList(ctx context.Context, id string) streamSet {
 	s.mu.Lock()
 	if c, ok := s.streams[id]; ok && time.Since(c.at) < cacheTTL {
 		s.mu.Unlock()
 		return c.v
 	}
 	s.mu.Unlock()
+	var failed []string
 
 	var list []Stream
 	for _, a := range openStreams(id) {
@@ -250,11 +258,14 @@ func (s *Service) streamList(ctx context.Context, id string) []Stream {
 			actx, cancel := context.WithTimeout(ctx, 12*time.Second)
 			defer cancel()
 			found, err := s.addons.streams(actx, base, id)
+			name := s.addonName(actx, base)
 			if err != nil {
 				s.Log.Warn("stream addon", "addon", base, "id", id, "err", err)
+				mu.Lock()
+				failed = append(failed, name)
+				mu.Unlock()
 				return
 			}
-			name := s.addonName(actx, base)
 			mu.Lock()
 			for _, a := range found {
 				list = append(list, classify(a, name))
@@ -264,14 +275,18 @@ func (s *Service) streamList(ctx context.Context, id string) []Stream {
 	}
 	wg.Wait()
 	sortStreams(list)
+	set := streamSet{streams: list, failed: failed}
+	if len(failed) > 0 {
+		return set // don't cache a partial answer; the next look retries the failed source
+	}
 
 	s.mu.Lock()
 	if len(s.streams) >= cacheEntries {
 		clear(s.streams)
 	}
-	s.streams[id] = cached[[]Stream]{list, time.Now()}
+	s.streams[id] = cached[streamSet]{set, time.Now()}
 	s.mu.Unlock()
-	return list
+	return set
 }
 
 func (s *Service) meta(ctx context.Context, id string) (Meta, error) {

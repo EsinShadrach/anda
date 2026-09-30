@@ -223,7 +223,7 @@ function FilmView({
   onClose: () => void;
   onPick: (id: number) => void;
 }) {
-  const [data, setData] = useState<{ meta: FilmDetails; streams: LibraryStream[]; hidden: Record<string, number> } | null>(null);
+  const [data, setData] = useState<{ meta: FilmDetails; streams: LibraryStream[]; hidden: Record<string, number>; failed?: string[] } | null>(null);
   const [error, setError] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [starting, setStarting] = useState<string | null>(null);
@@ -306,8 +306,15 @@ function FilmView({
               <p className="mt-1 text-fog-500">
                 {hiddenCount > 0
                   ? `${hiddenCount} found, but they need transcoding (HEVC, 10-bit, DTS or AC3 audio) or are over 4 GB.`
-                  : "None of the configured sources have this film."}
+                  : data.failed?.length
+                    ? `${data.failed.join(" and ")} didn't answer, so there's nothing to show yet.`
+                    : "None of the configured sources have this film."}
               </p>
+              {data.failed?.length ? (
+                <Button variant="glass" onClick={() => setAttempt((n) => n + 1)} className="mt-3">
+                  <ArrowClockwiseIcon size={18} /> Try again
+                </Button>
+              ) : null}
             </div>
           ) : (
             <ul className="flex flex-col gap-2">
@@ -326,6 +333,9 @@ function FilmView({
           {data && data.streams.length > 0 && hiddenCount > 0 && (
             <p className="text-[13px] leading-relaxed text-fog-600">{hiddenText(data.hidden)}</p>
           )}
+          {data && data.streams.length > 0 && data.failed?.length ? (
+            <p className="text-[13px] leading-relaxed text-fog-600">{data.failed.join(" and ")} didn&rsquo;t answer; showing the rest.</p>
+          ) : null}
         </section>
       </div>
     </div>
