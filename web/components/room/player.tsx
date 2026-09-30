@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
+  ArrowClockwiseIcon,
   CornersInIcon,
   CornersOutIcon,
   FilmStripIcon,
@@ -13,6 +14,7 @@ import {
 } from "@phosphor-icons/react";
 import type { RoomConnection, RoomView } from "@/lib/room";
 import { PlayerSync } from "@/lib/player-sync";
+import { attachHls } from "@/lib/hls-source";
 import { Spinner } from "@/components/ui/spinner";
 
 const IDLE_MS = 2600;
@@ -36,10 +38,26 @@ export function Player({
   const [fullscreen, setFullscreen] = useState(false);
   const idleTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const url = view.media!.url;
+
   useEffect(() => {
-    sync.attach(videoRef.current!);
-    return () => sync.detach();
-  }, [sync, view.media?.url]);
+    const video = videoRef.current!;
+    let cleanup: (() => void) | undefined;
+    let live = true;
+    setLoadError(null);
+    attachHls(video, url, (msg) => live && setLoadError(msg)).then((c) => {
+      if (live) cleanup = c;
+      else c();
+    });
+    sync.attach(video);
+    return () => {
+      live = false;
+      sync.detach();
+      cleanup?.();
+    };
+  }, [sync, url, attempt]);
 
   const wantPlaying = (view.intent?.want ?? view.playback?.want) === "playing";
   const running = view.playback?.want === "playing" && view.blockers.length === 0;
@@ -123,7 +141,6 @@ export function Player({
     >
       <video
         ref={videoRef}
-        src={view.media!.url}
         playsInline
         preload="auto"
         className="absolute inset-0 size-full object-contain"
@@ -198,6 +215,21 @@ export function Player({
       </div>
 
       <Toast view={view} />
+
+      {loadError && (
+        <div className="absolute inset-0 z-20 grid place-items-center bg-ink-950/70 backdrop-blur-md">
+          <div className="enter flex max-w-[34ch] flex-col items-center gap-3 px-6 text-center">
+            <p className="text-lg font-semibold tracking-[-0.02em] text-fog-50">{loadError}</p>
+            <p className="text-[14px] text-fog-300">The rest of the room keeps watching. Try again in a moment.</p>
+            <button
+              onClick={() => setAttempt((n) => n + 1)}
+              className="glass press mt-1 flex h-11 items-center gap-2 rounded-xl px-4 text-[15px] font-semibold text-fog-50"
+            >
+              <ArrowClockwiseIcon size={18} weight="bold" /> Try again
+            </button>
+          </div>
+        </div>
+      )}
 
       <AnimatePresence>
         {ps.needsTap && (

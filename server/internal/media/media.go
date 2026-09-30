@@ -1,15 +1,16 @@
-// Package media owns the films on disk: registering what's in the media directory and
-// streaming it to players. HLS remuxing (step 4) and the torrent cache (step 5) land here.
+// Package media owns the films on disk: registering what's in the media directory,
+// preparing HLS for the ones browsers can play, and serving the playlists and segments.
+// The torrent cache (step 5) lands here too.
 package media
 
 import (
 	"context"
-	"errors"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -19,25 +20,79 @@ import (
 	"anda/internal/store"
 )
 
-// Playable containers the browser can stream directly (H.264/AAC in MP4).
-var playable = map[string]bool{".mp4": true, ".m4v": true}
+// Containers worth probing. Whether the streams inside are playable is ffprobe's call.
+var containers = map[string]bool{".mp4": true, ".m4v": true, ".mkv": true, ".mov": true, ".webm": true}
+
+// hlsFile is every name a prepared film's directory can hold.
+var hlsFile = regexp.MustCompile(`^(index\.m3u8|init\.mp4|seg_\d{5}\.m4s)$`)
+
+const rescanEvery = 5 * time.Minute
 
 type Service struct {
-	Dir          string
+	Dir          string // source files
+	HLSDir       string // prepared playlists and segments, one directory per film
 	Store        store.MediaStore
 	Authenticate func(*http.Request) (store.User, error)
 	Log          *slog.Logger
+
+	queue chan store.Media
 }
 
-// Scan registers every playable file under Dir. Titles come from file names:
-// "Big Buck Bunny.mp4" becomes "Big Buck Bunny".
-func (s *Service) Scan(ctx context.Context) error {
+// Run scans the media directory now and every few minutes, and prepares new films one at
+// a time until ctx ends.
+func (s *Service) Run(ctx context.Context) {
+	s.queue = make(chan store.Media, 64)
+	go s.worker(ctx)
+	t := time.NewTicker(rescanEvery)
+	defer t.Stop()
+	for {
+		if err := s.scan(ctx); err != nil {
+			s.Log.Error("media scan", "err", err)
+		}
+		s.enqueuePending(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+func (s *Service) worker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case m := <-s.queue:
+			s.prepare(ctx, m)
+		}
+	}
+}
+
+func (s *Service) enqueuePending(ctx context.Context) {
+	list, err := s.Store.MediaNeedingHLS(ctx)
+	if err != nil {
+		s.Log.Error("list pending media", "err", err)
+		return
+	}
+	for _, m := range list {
+		select {
+		case s.queue <- m:
+		default:
+			return // queue full; the next rescan picks the rest up
+		}
+	}
+}
+
+// scan registers every candidate file under Dir. Titles come from file names:
+// "Big Buck Bunny.m4v" becomes "Big Buck Bunny".
+func (s *Service) scan(ctx context.Context) error {
 	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
 		return err
 	}
 	n := 0
 	err := filepath.WalkDir(s.Dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !playable[strings.ToLower(filepath.Ext(path))] {
+		if err != nil || d.IsDir() || !containers[strings.ToLower(filepath.Ext(path))] {
 			return err
 		}
 		info, err := d.Info()
@@ -55,22 +110,22 @@ func (s *Service) Scan(ctx context.Context) error {
 		n++
 		return nil
 	})
-	s.Log.Info("media scan", "dir", s.Dir, "files", n)
+	s.Log.Debug("media scan", "dir", s.Dir, "files", n)
 	return err
 }
 
 func (s *Service) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/library/ready", s.handleReady)
-	mux.HandleFunc("GET /media/{id}/video", s.handleVideo)
+	mux.HandleFunc("GET /media/{id}/{file}", s.handleHLS)
 }
 
-// Info returns the protocol description of a ready film, for set_media and room_state.
+// Info returns the protocol description of a playable film, for set_media and room_state.
 func (s *Service) Info(ctx context.Context, id int64) (protocol.Media, error) {
 	m, err := s.Store.MediaByID(ctx, id)
 	if err != nil {
 		return protocol.Media{}, err
 	}
-	if m.Status != "ready" {
+	if m.Status != "ready" || m.HLSState != store.HLSReady {
 		return protocol.Media{}, store.ErrNotFound
 	}
 	return toProto(m), nil
@@ -110,38 +165,28 @@ func (s *Service) handleReady(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"films": out})
 }
 
-// handleVideo streams a film with Range support (http.ServeContent), so players can seek
-// without downloading everything before that point.
-func (s *Service) handleVideo(w http.ResponseWriter, r *http.Request) {
+// handleHLS serves a prepared film's playlist, init segment and media segments. The
+// directory only exists once a remux finished, so its presence means "ready".
+func (s *Service) handleHLS(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.Authenticate(r); err != nil {
 		http.Error(w, "not signed in", http.StatusUnauthorized)
 		return
 	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
+	name := r.PathValue("file")
+	if err != nil || !hlsFile.MatchString(name) {
 		http.NotFound(w, r)
 		return
 	}
-	m, err := s.Store.MediaByID(r.Context(), id)
-	if errors.Is(err, store.ErrNotFound) || (err == nil && m.Status != "ready") {
+	// os.Root keeps the lookup inside this film's directory.
+	root, err := os.OpenRoot(s.hlsDir(id))
+	if err != nil {
 		http.NotFound(w, r)
-		return
-	}
-	if err != nil {
-		s.Log.Error("load media", "id", id, "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	// os.Root keeps the stored relative path from escaping the media directory.
-	root, err := os.OpenRoot(s.Dir)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	defer root.Close()
-	f, err := root.Open(filepath.FromSlash(m.Path))
+	f, err := root.Open(name)
 	if err != nil {
-		s.Log.Warn("open media", "id", id, "path", m.Path, "err", err)
 		http.NotFound(w, r)
 		return
 	}
@@ -151,11 +196,25 @@ func (s *Service) handleVideo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "video/mp4")
-	w.Header().Set("Cache-Control", "private, max-age=86400")
+	switch {
+	case strings.HasSuffix(name, ".m3u8"):
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		w.Header().Set("Cache-Control", "private, no-cache")
+	case strings.HasSuffix(name, ".m4s"):
+		w.Header().Set("Content-Type", "video/iso.segment")
+		w.Header().Set("Cache-Control", "private, max-age=86400")
+	default:
+		w.Header().Set("Content-Type", "video/mp4")
+		w.Header().Set("Cache-Control", "private, max-age=86400")
+	}
 	http.ServeContent(w, r, "", info.ModTime(), f)
 }
 
 func toProto(m store.Media) protocol.Media {
-	return protocol.Media{ID: m.ID, Title: m.Title, URL: "/media/" + strconv.FormatInt(m.ID, 10) + "/video"}
+	return protocol.Media{
+		ID:       m.ID,
+		Title:    m.Title,
+		URL:      "/media/" + strconv.FormatInt(m.ID, 10) + "/index.m3u8",
+		Duration: m.Duration,
+	}
 }

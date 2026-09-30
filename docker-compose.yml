@@ -1,4 +1,5 @@
-# Anda on the shared 1 vCPU / 1 GB VM. Limits total 128 MB (budget ~150 MB; see CLAUDE.md).
+# Anda on the shared 1 vCPU / 1 GB VM. Limits total 160 MB (budget ~150 MB; the API needs
+# the extra for ffmpeg remuxes, fine while Pulse is stopped; see CLAUDE.md).
 # No published ports: Caddy in ../proxy reaches us on the "edge" network as anda-api / anda-web.
 services:
   api:
@@ -7,13 +8,13 @@ services:
     environment:
       ANDA_SECURE_COOKIE: "true"   # served over HTTPS via Caddy
       ANDA_TRUST_PROXY: "true"     # client IP from X-Forwarded-For, set by Caddy
-      GOMEMLIMIT: 72MiB            # GC works harder before hitting mem_limit
+      GOMEMLIMIT: 64MiB            # Go heap; leaves room for an ffmpeg remux (~30 MB peak)
     volumes:
-      - data:/data                 # SQLite file (and the film cache, later)
+      - data:/data                 # SQLite file, films (/data/media) and their HLS (/data/hls)
     networks:
       edge:
         aliases: [anda-api]
-    mem_limit: 96m
+    mem_limit: 128m
 
   web:
     build: ./web

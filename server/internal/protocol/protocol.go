@@ -44,6 +44,7 @@ const (
 	TypeHostChanged    = "host_changed"
 	TypeReplaced       = "replaced"
 	TypeReconnectLater = "reconnect_later"
+	TypeRoomEnded      = "room_ended"
 	TypeError          = "error"
 
 	TypePlaybackUpdate = "playback_update"
@@ -116,9 +117,10 @@ type RoomState struct {
 }
 
 type Media struct {
-	ID    int64  `json:"id"`
-	Title string `json:"title"`
-	URL   string `json:"url"`
+	ID       int64   `json:"id"`
+	Title    string  `json:"title"`
+	URL      string  `json:"url"`                // HLS playlist
+	Duration float64 `json:"duration,omitempty"` // seconds
 }
 
 // PlaybackState anchors the room clock: at ServerTime the film was at Position. While the
@@ -217,6 +219,11 @@ type MemberUpdate struct {
 
 type HostChanged struct {
 	Host int64 `json:"host"`
+}
+
+// RoomEnded tells everyone in a room that its owner ended it; the room no longer exists.
+type RoomEnded struct {
+	By User `json:"by"`
 }
 
 type ReconnectLater struct {

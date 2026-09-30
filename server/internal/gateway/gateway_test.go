@@ -285,3 +285,89 @@ func TestBadVersionAndUnauthenticated(t *testing.T) {
 		t.Fatalf("version error: %+v", pe)
 	}
 }
+
+// do sends an authenticated request and returns the status, decoding JSON into v if given.
+func (e *env) do(method, path, cookie string, v any) int {
+	e.t.Helper()
+	req, _ := http.NewRequest(method, e.srv.URL+path, nil)
+	req.Header.Set("Cookie", cookie)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if v != nil {
+		json.NewDecoder(res.Body).Decode(v)
+	}
+	return res.StatusCode
+}
+
+type visitList struct {
+	Rooms []struct {
+		Code   string `json:"code"`
+		Owner  string `json:"owner"`
+		Mine   bool   `json:"mine"`
+		Online int    `json:"online"`
+	} `json:"rooms"`
+}
+
+func TestVisitedRoomsForgetAndEnd(t *testing.T) {
+	e := newEnv(t)
+	rafe, chioma := e.signup("rafe"), e.signup("chioma")
+	older := e.createRoom(rafe)
+	code := e.createRoom(rafe)
+
+	b := e.dial(chioma)
+	b.hello("")
+	b.send(protocol.TypeJoinRoom, protocol.JoinRoom{Code: code})
+	b.expect(protocol.TypeRoomState, nil)
+
+	var list visitList
+	e.do("GET", "/api/me/rooms", rafe, &list)
+	if len(list.Rooms) != 2 || !list.Rooms[0].Mine || list.Rooms[0].Code != code || list.Rooms[1].Code != older {
+		t.Fatalf("owner's list: %+v", list)
+	}
+	e.do("GET", "/api/me/rooms", chioma, &list)
+	if len(list.Rooms) != 1 || list.Rooms[0].Mine || list.Rooms[0].Owner != "rafe" || list.Rooms[0].Online != 1 {
+		t.Fatalf("guest's list: %+v", list)
+	}
+
+	if s := e.do("DELETE", "/api/rooms/"+code, chioma, nil); s != http.StatusForbidden {
+		t.Fatalf("guest ended the room: %d", s)
+	}
+
+	// Rafe ends it while Chioma is inside: she's told, and it's gone for everyone.
+	if s := e.do("DELETE", "/api/rooms/"+code, rafe, nil); s != http.StatusNoContent {
+		t.Fatalf("end: %d", s)
+	}
+	var ended protocol.RoomEnded
+	b.expect(protocol.TypeRoomEnded, &ended)
+	if ended.By.Username != "rafe" {
+		t.Fatalf("room_ended: %+v", ended)
+	}
+	if s := e.do("GET", "/api/rooms/"+code, chioma, nil); s != http.StatusNotFound {
+		t.Fatalf("ended room still there: %d", s)
+	}
+	b.send(protocol.TypeJoinRoom, protocol.JoinRoom{Code: code})
+	var perr protocol.Error
+	b.expect(protocol.TypeError, &perr)
+	if perr.Code != protocol.ErrRoomNotFound {
+		t.Fatalf("rejoin ended room: %+v", perr)
+	}
+	e.do("GET", "/api/me/rooms", chioma, &list)
+	if len(list.Rooms) != 0 {
+		t.Fatalf("ended room still listed: %+v", list)
+	}
+
+	// Forgetting only takes it off your own list.
+	if s := e.do("DELETE", "/api/me/rooms/"+older, rafe, nil); s != http.StatusNoContent {
+		t.Fatalf("forget: %d", s)
+	}
+	e.do("GET", "/api/me/rooms", rafe, &list)
+	if len(list.Rooms) != 0 {
+		t.Fatalf("forgotten room still listed: %+v", list)
+	}
+	if s := e.do("GET", "/api/rooms/"+older, rafe, nil); s != http.StatusOK {
+		t.Fatalf("forgotten room is gone: %d", s)
+	}
+}

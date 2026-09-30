@@ -178,6 +178,51 @@ func (s *SQLite) TouchRoom(ctx context.Context, id int64, at time.Time) error {
 	return err
 }
 
+func (s *SQLite) DeleteRoom(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM rooms WHERE id = ?`, id)
+	return err
+}
+
+func (s *SQLite) RecordVisit(ctx context.Context, roomID, userID int64, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO room_members (room_id, user_id, first_joined_at, last_joined_at) VALUES (?, ?, ?, ?)
+		ON CONFLICT (user_id, room_id) DO UPDATE SET last_joined_at = excluded.last_joined_at`,
+		roomID, userID, at.Unix(), at.Unix())
+	return err
+}
+
+func (s *SQLite) VisitedRooms(ctx context.Context, userID int64, limit int) ([]VisitedRoom, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT r.id, r.code, r.owner_id, r.created_at, r.last_active_at, u.username, m.last_joined_at
+		FROM room_members m
+		JOIN rooms r ON r.id = m.room_id
+		JOIN users u ON u.id = r.owner_id
+		WHERE m.user_id = ?
+		ORDER BY m.last_joined_at DESC, r.id DESC LIMIT ?`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []VisitedRoom
+	for rows.Next() {
+		var v VisitedRoom
+		var created, active, joined int64
+		if err := rows.Scan(&v.ID, &v.Code, &v.OwnerID, &created, &active, &v.OwnerName, &joined); err != nil {
+			return nil, err
+		}
+		v.CreatedAt = time.Unix(created, 0)
+		v.LastActiveAt = time.Unix(active, 0)
+		v.LastJoinedAt = time.Unix(joined, 0)
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLite) ForgetVisit(ctx context.Context, roomID, userID int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM room_members WHERE room_id = ? AND user_id = ?`, roomID, userID)
+	return err
+}
+
 func (s *SQLite) AddChatMessage(ctx context.Context, m ChatMessage) (ChatMessage, error) {
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO chat_messages (room_id, user_id, text, created_at) VALUES (?, ?, ?, ?)`,
@@ -220,7 +265,10 @@ func (s *SQLite) RecentChatMessages(ctx context.Context, roomID int64, limit int
 func (s *SQLite) UpsertLocalMedia(ctx context.Context, title, path string, size int64) (Media, error) {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO media (title, size_bytes, status, path) VALUES (?, ?, 'ready', ?)
-		ON CONFLICT (path) DO UPDATE SET size_bytes = excluded.size_bytes, status = 'ready'`,
+		ON CONFLICT (path) DO UPDATE SET
+			status = 'ready',
+			hls_state = CASE WHEN media.size_bytes = excluded.size_bytes THEN media.hls_state ELSE 'pending' END,
+			size_bytes = excluded.size_bytes`,
 		title, size, path)
 	if err != nil {
 		return Media{}, err
@@ -233,7 +281,27 @@ func (s *SQLite) MediaByID(ctx context.Context, id int64) (Media, error) {
 }
 
 func (s *SQLite) ReadyMedia(ctx context.Context) ([]Media, error) {
-	rows, err := s.db.QueryContext(ctx, mediaCols+` WHERE status = 'ready' ORDER BY COALESCE(last_watched_at, 0) DESC, title`)
+	return s.mediaList(ctx, mediaCols+` WHERE status = 'ready' AND hls_state = 'ready' ORDER BY COALESCE(last_watched_at, 0) DESC, title`)
+}
+
+func (s *SQLite) MediaNeedingHLS(ctx context.Context) ([]Media, error) {
+	return s.mediaList(ctx, mediaCols+` WHERE status = 'ready' AND hls_state IN ('pending', 'remuxing') ORDER BY id`)
+}
+
+func (s *SQLite) SetHLSState(ctx context.Context, id int64, state, errMsg string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE media SET hls_state = ?, hls_error = NULLIF(?, '') WHERE id = ?`, state, errMsg, id)
+	return err
+}
+
+func (s *SQLite) SetProbe(ctx context.Context, id int64, videoCodec, audioCodec string, duration float64) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE media SET video_codec = NULLIF(?, ''), audio_codec = NULLIF(?, ''), duration_seconds = ? WHERE id = ?`,
+		videoCodec, audioCodec, duration, id)
+	return err
+}
+
+func (s *SQLite) mediaList(ctx context.Context, query string) ([]Media, error) {
+	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -254,12 +322,15 @@ func (s *SQLite) TouchMedia(ctx context.Context, id int64, at time.Time) error {
 	return err
 }
 
-const mediaCols = `SELECT id, title, size_bytes, status, path, COALESCE(last_watched_at, 0) FROM media`
+const mediaCols = `SELECT id, title, size_bytes, status, path, COALESCE(last_watched_at, 0),
+	hls_state, COALESCE(hls_error, ''), COALESCE(video_codec, ''), COALESCE(audio_codec, ''), COALESCE(duration_seconds, 0)
+	FROM media`
 
 func (s *SQLite) scanMedia(row interface{ Scan(...any) error }) (Media, error) {
 	var m Media
 	var watched int64
-	if err := row.Scan(&m.ID, &m.Title, &m.SizeBytes, &m.Status, &m.Path, &watched); err != nil {
+	if err := row.Scan(&m.ID, &m.Title, &m.SizeBytes, &m.Status, &m.Path, &watched,
+		&m.HLSState, &m.HLSError, &m.VideoCodec, &m.AudioCodec, &m.Duration); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Media{}, ErrNotFound
 		}

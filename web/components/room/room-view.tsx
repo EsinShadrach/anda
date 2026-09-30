@@ -35,6 +35,7 @@ export function RoomView({ code }: { code: string }) {
     return () => conn.stop();
   }, [conn]);
 
+  if (view.endedBy) return <RoomGone code={code} endedBy={view.endedBy.id === view.me ? "you" : view.endedBy.username} />;
   if (view.notFound) return <RoomGone code={code} />;
 
   return (

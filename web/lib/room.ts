@@ -39,6 +39,7 @@ export type RoomView = {
   status: ConnStatus;
   joined: boolean;
   notFound: boolean;
+  endedBy: { id: number; username: string } | null; // the owner ended the room while we were in it
   me: number | null;
   code: string;
   host: number;
@@ -104,6 +105,7 @@ export class RoomConnection {
       status: "connecting",
       joined: false,
       notFound: false,
+      endedBy: null,
       me: null,
       code,
       host: 0,
@@ -398,6 +400,10 @@ export class RoomConnection {
       }
       case "replaced":
         this.set({ status: "replaced" });
+        break;
+      case "room_ended":
+        this.set({ endedBy: payload.by });
+        this.stop();
         break;
       case "reconnect_later":
         this.reconnectDelay = (payload.delay ?? 5) * 1000;

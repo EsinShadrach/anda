@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { PlusIcon, WarningCircleIcon } from "@phosphor-icons/react";
+import Link from "next/link";
+import { ArrowRightIcon, PlusIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { ApiError, rooms, type User } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { CodeInput } from "@/components/ui/code-input";
@@ -69,6 +70,13 @@ export function Lobby({ user }: { user: User }) {
           <PlusIcon size={20} weight="bold" />
           Start a room
         </Button>
+        <Link
+          href="/me"
+          className="inline-flex w-fit items-center gap-1.5 text-[14px] font-medium text-fog-500 transition-colors hover:text-fog-100"
+        >
+          Or go back to one of your rooms
+          <ArrowRightIcon size={14} weight="bold" />
+        </Link>
       </div>
 
       <div className="flex flex-col gap-3">

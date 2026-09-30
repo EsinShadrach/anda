@@ -22,7 +22,13 @@ const (
 	codeLen      = 6
 )
 
-var ErrNotFound = errors.New("rooms: room not found")
+var (
+	ErrNotFound = errors.New("rooms: room not found")
+	ErrNotOwner = errors.New("rooms: not the room's owner")
+)
+
+// historyLimit caps the rooms listed on someone's profile.
+const historyLimit = 50
 
 // MediaInfo resolves films for set_media (media.Service in production).
 type MediaInfo interface {
@@ -68,6 +74,9 @@ func (m *Manager) Create(ctx context.Context, ownerID int64) (store.Room, error)
 		if errors.Is(err, store.ErrCodeTaken) {
 			continue
 		}
+		if err == nil {
+			m.recordVisit(ctx, room.ID, ownerID)
+		}
 		return room, err
 	}
 	return store.Room{}, errors.New("rooms: no free code after 5 tries")
@@ -99,9 +108,71 @@ func (m *Manager) Join(ctx context.Context, code string, u protocol.User, s Send
 			return "", err
 		}
 		if r.do(func() { r.join(u, s) }) {
+			m.recordVisit(ctx, r.info.ID, u.ID)
 			return code, nil
 		}
 		// The room shut down between lookup and join; load it again.
+	}
+}
+
+// Visit is a room on someone's profile, with what's happening in it right now.
+type Visit struct {
+	store.VisitedRoom
+	Online int    // members connected now
+	Film   string // title of the film on screen, "" if none or the room isn't live
+}
+
+// Visited lists the rooms userID has been in, most recently joined first.
+func (m *Manager) Visited(ctx context.Context, userID int64) ([]Visit, error) {
+	rooms, err := m.rooms.VisitedRooms(ctx, userID, historyLimit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Visit, len(rooms))
+	for i, v := range rooms {
+		out[i] = Visit{VisitedRoom: v}
+		if r := m.get(v.Code); r != nil {
+			sum := make(chan Visit, 1)
+			if r.do(func() { sum <- Visit{Online: r.onlineCount(), Film: r.filmTitle()} }) {
+				live := <-sum
+				out[i].Online, out[i].Film = live.Online, live.Film
+			}
+		}
+	}
+	return out, nil
+}
+
+// End deletes a room for good, on its owner's say-so. Anyone inside is told and sent out.
+func (m *Manager) End(ctx context.Context, code string, by protocol.User) error {
+	room, err := m.Lookup(ctx, code)
+	if err != nil {
+		return err
+	}
+	if room.OwnerID != by.ID {
+		return ErrNotOwner
+	}
+	// Delete first, so nobody can load the room again once the live one is gone.
+	if err := m.rooms.DeleteRoom(ctx, room.ID); err != nil {
+		return err
+	}
+	if r := m.get(room.Code); r != nil {
+		r.do(func() { r.end(by) })
+	}
+	return nil
+}
+
+// Forget takes a room off userID's list without touching the room.
+func (m *Manager) Forget(ctx context.Context, code string, userID int64) error {
+	room, err := m.Lookup(ctx, code)
+	if err != nil {
+		return err
+	}
+	return m.rooms.ForgetVisit(ctx, room.ID, userID)
+}
+
+func (m *Manager) recordVisit(ctx context.Context, roomID, userID int64) {
+	if err := m.rooms.RecordVisit(ctx, roomID, userID, time.Now()); err != nil {
+		m.log.Warn("record room visit", "room", roomID, "user", userID, "err", err)
 	}
 }
 

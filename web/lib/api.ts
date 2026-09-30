@@ -37,10 +37,26 @@ export const api = {
 
 export type RoomInfo = { code: string; owner?: string; online: number };
 
+/** A room on your profile. `mine` means you started it, so you can end it. */
+export type VisitedRoom = {
+  code: string;
+  owner: string;
+  mine: boolean;
+  online: number;
+  film?: string; // on screen right now
+  created_at: number; // unix ms
+  last_joined_at: number; // unix ms
+};
+
 export const rooms = {
   create: () => request<{ room: RoomInfo }>("POST", "/api/rooms").then((r) => r.room),
   get: (code: string) =>
     request<{ room: RoomInfo }>("GET", `/api/rooms/${encodeURIComponent(code)}`).then((r) => r.room),
+  visited: () => request<{ rooms: VisitedRoom[] }>("GET", "/api/me/rooms").then((r) => r.rooms),
+  /** Deletes the room for everyone. Owner only. */
+  end: (code: string) => request<void>("DELETE", `/api/rooms/${encodeURIComponent(code)}`),
+  /** Takes the room off your list; it keeps existing. */
+  forget: (code: string) => request<void>("DELETE", `/api/me/rooms/${encodeURIComponent(code)}`),
 };
 
 const CODE_ALPHABET = "BCDFGHJKMNPQRSTVWXZ23456789";

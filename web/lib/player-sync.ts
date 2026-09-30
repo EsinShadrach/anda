@@ -31,6 +31,13 @@ export class PlayerSync {
   private waitingSince = 0;
   private unlocked = false;
   private unlocking = false; // our own play() from the unlock tap is not a user action
+
+  // Our own play()/pause()/seeks fire events asynchronously; by the time they arrive the
+  // room may already have moved on, so "does it disagree with the room?" alone would
+  // misread them as user actions. Remember what we did and ignore its echo.
+  private selfPlayAt = 0;
+  private selfPauseAt = 0;
+  private selfSeek = { target: -1, at: 0 };
   private listeners = new Set<() => void>();
   private detachVideo: (() => void) | null = null;
   private state: PlayerState = {
@@ -146,10 +153,13 @@ export class PlayerSync {
     const { target, running } = this.desired(view);
 
     if (running && this.unlocked) {
-      if (v.paused) v.play().catch(this.onBlocked);
+      if (v.paused) {
+        this.selfPlayAt = Date.now();
+        v.play().catch(this.onBlocked);
+      }
       const drift = v.currentTime - target;
       if (Math.abs(drift) > 4 || drift > 0.5) {
-        v.currentTime = target;
+        this.seekTo(v, target);
         v.playbackRate = 1;
       } else if (drift < -0.5) {
         v.playbackRate = 1.1; // catching up after a short stall
@@ -159,15 +169,23 @@ export class PlayerSync {
         v.playbackRate = 1;
       }
     } else {
-      if (!v.paused) v.pause();
+      if (!v.paused) {
+        this.selfPauseAt = Date.now();
+        v.pause();
+      }
       v.playbackRate = 1;
-      if (Math.abs(v.currentTime - target) > 0.1 && !v.seeking) v.currentTime = target; // paused: show the same frame
+      if (Math.abs(v.currentTime - target) > 0.1 && !v.seeking) this.seekTo(v, target); // paused: show the same frame
     }
 
     // Report promptly while the room is waiting on us; otherwise every couple of seconds.
     const waitingOnMe = view.blockers.some((b) => b.user_id === view.me);
     if (waitingOnMe || Date.now() - this.lastReport > REPORT_MS) this.report(false);
   };
+
+  private seekTo(v: HTMLVideoElement, target: number) {
+    this.selfSeek = { target, at: Date.now() };
+    v.currentTime = target;
+  }
 
   /** What the room (or our pending intent) says the video should be doing. */
   private desired(view: RoomView): { target: number; running: boolean } {
@@ -200,7 +218,7 @@ export class PlayerSync {
 
   private onPlay = () => {
     const view = this.conn.getSnapshot();
-    if (!view.playback || this.unlocking) return;
+    if (!view.playback || this.unlocking || Date.now() - this.selfPlayAt < 1000) return;
     const wanted = view.intent?.want ?? view.playback.want;
     if (wanted !== "playing") this.conn.play();
   };
@@ -211,6 +229,7 @@ export class PlayerSync {
     // A hidden page's video is paused by the browser (tab switch, phone locked), not by a
     // person: that makes this viewer away, it doesn't pause the room for everyone.
     if (!v || !view.playback || v.ended || this.unlocking || document.visibilityState === "hidden") return;
+    if (Date.now() - this.selfPauseAt < 1000) return; // ours
     if (this.desired(view).running) this.conn.pause();
   };
 
@@ -218,6 +237,8 @@ export class PlayerSync {
     const v = this.video;
     const view = this.conn.getSnapshot();
     if (!v || !view.playback) return;
+    const ours = Math.abs(v.currentTime - this.selfSeek.target) < 0.5 && Date.now() - this.selfSeek.at < 2000;
+    if (ours) return;
     if (Math.abs(v.currentTime - this.desired(view).target) > SEEK_TOLERANCE) this.conn.seek(v.currentTime);
   };
 

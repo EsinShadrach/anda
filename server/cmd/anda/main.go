@@ -50,10 +50,15 @@ func run(log *slog.Logger) error {
 	}, log)
 	go authSvc.RunJanitor(ctx)
 
-	films := &media.Service{Dir: env("ANDA_MEDIA", filepath.Join(filepath.Dir(dbPath), "media")), Store: db, Authenticate: authSvc.UserFromRequest, Log: log}
-	if err := films.Scan(ctx); err != nil {
-		return err
+	dataDir := filepath.Dir(dbPath)
+	films := &media.Service{
+		Dir:          env("ANDA_MEDIA", filepath.Join(dataDir, "media")),
+		HLSDir:       env("ANDA_HLS", filepath.Join(dataDir, "hls")),
+		Store:        db,
+		Authenticate: authSvc.UserFromRequest,
+		Log:          log,
 	}
+	go films.Run(ctx)
 	roomMgr := rooms.NewManager(db, db, films, log)
 	// Extra WebSocket origins, e.g. "localhost:3000" for the Next dev server.
 	var origins []string

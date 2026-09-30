@@ -66,6 +66,21 @@ type Rooms interface {
 	CreateRoom(ctx context.Context, code string, ownerID int64) (Room, error)
 	RoomByCode(ctx context.Context, code string) (Room, error)
 	TouchRoom(ctx context.Context, id int64, at time.Time) error
+	// DeleteRoom removes the room with its chat and member history.
+	DeleteRoom(ctx context.Context, id int64) error
+
+	// RecordVisit notes that userID joined roomID at at (first or again).
+	RecordVisit(ctx context.Context, roomID, userID int64, at time.Time) error
+	// VisitedRooms lists up to limit rooms userID has been in, most recently joined first.
+	VisitedRooms(ctx context.Context, userID int64, limit int) ([]VisitedRoom, error)
+	// ForgetVisit drops roomID from userID's list; the room itself stays.
+	ForgetVisit(ctx context.Context, roomID, userID int64) error
+}
+
+type VisitedRoom struct {
+	Room
+	OwnerName    string
+	LastJoinedAt time.Time
 }
 
 type Chat interface {
@@ -78,16 +93,38 @@ type Media struct {
 	ID            int64
 	Title         string
 	SizeBytes     int64
-	Status        string // downloading | ready
+	Status        string // downloading | ready (the file itself)
 	Path          string // relative to the media directory
 	LastWatchedAt time.Time
+
+	HLSState   string // pending | remuxing | ready | incompatible | failed
+	HLSError   string
+	VideoCodec string
+	AudioCodec string
+	Duration   float64 // seconds, once probed
 }
 
+// HLS states.
+const (
+	HLSPending      = "pending"
+	HLSRemuxing     = "remuxing"
+	HLSReady        = "ready"
+	HLSIncompatible = "incompatible"
+	HLSFailed       = "failed"
+)
+
 type MediaStore interface {
-	// UpsertLocalMedia registers a ready file found on disk, keyed by its path.
+	// UpsertLocalMedia registers a ready file found on disk, keyed by its path. A file
+	// whose size changed goes back to HLS pending.
 	UpsertLocalMedia(ctx context.Context, title, path string, size int64) (Media, error)
 	MediaByID(ctx context.Context, id int64) (Media, error)
-	// ReadyMedia lists ready films, most recently watched first.
+	// ReadyMedia lists films that can be played (file ready and HLS ready), most recently
+	// watched first.
 	ReadyMedia(ctx context.Context) ([]Media, error)
+	// MediaNeedingHLS lists files that still need probing/remuxing (pending, or remuxing
+	// when a previous run was interrupted).
+	MediaNeedingHLS(ctx context.Context) ([]Media, error)
+	SetHLSState(ctx context.Context, id int64, state, errMsg string) error
+	SetProbe(ctx context.Context, id int64, videoCodec, audioCodec string, duration float64) error
 	TouchMedia(ctx context.Context, id int64, at time.Time) error
 }

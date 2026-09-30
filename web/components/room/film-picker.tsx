@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ArrowClockwiseIcon, FilmStripIcon, PlayIcon, XIcon } from "@phosphor-icons/react";
-import { library, type Film } from "@/lib/api";
+import { library, type Film as ApiFilm } from "@/lib/api";
+
+// The ready shelf also carries the runtime once a film has been probed.
+type Film = ApiFilm & { duration?: number };
 import { Button } from "@/components/ui/button";
 
 // The host picks from films already on the server (the "Ready to watch" shelf).
@@ -107,7 +110,10 @@ function Picker({ onClose, onPick }: { onClose: () => void; onPick: (f: Film) =>
                     </span>
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="truncate text-[16px] font-semibold tracking-[-0.01em] text-fog-50">{f.title}</span>
-                      <span className="text-[13px] text-fog-500">{formatSize(f.size_bytes)}</span>
+                      <span className="text-[13px] text-fog-500">
+                        {f.duration ? `${formatRuntime(f.duration)} · ` : ""}
+                        {formatSize(f.size_bytes)}
+                      </span>
                     </span>
                     <span className="grid size-10 shrink-0 place-items-center rounded-full bg-ember-500 text-ink-950 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100 max-sm:opacity-100">
                       <PlayIcon size={18} weight="fill" />
@@ -121,6 +127,11 @@ function Picker({ onClose, onPick }: { onClose: () => void; onPick: (f: Film) =>
       </motion.div>
     </motion.div>
   );
+}
+
+function formatRuntime(s: number) {
+  const m = Math.round(s / 60);
+  return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m} min`;
 }
 
 function formatSize(bytes: number) {

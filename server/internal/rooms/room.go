@@ -59,6 +59,7 @@ type Room struct {
 	chat     []protocol.ChatMessage
 	lastSave time.Time
 	pb       playback
+	ended    bool // the owner ended it; the goroutine exits after this event
 }
 
 func newRoom(m *Manager, info store.Room, history []store.ChatMessage) *Room {
@@ -93,6 +94,11 @@ func (r *Room) run() {
 		select {
 		case f := <-r.inbox:
 			f()
+			if r.ended {
+				r.m.remove(r)
+				close(r.done)
+				return
+			}
 			if len(r.members) == 0 {
 				idle.Reset(r.m.idleTimeout)
 			} else {
@@ -179,6 +185,13 @@ func (r *Room) leave(userID int64) {
 	}
 }
 
+// end tells everyone the room is over and empties it. The room is already deleted.
+func (r *Room) end(by protocol.User) {
+	r.broadcast(protocol.TypeRoomEnded, protocol.RoomEnded{By: by})
+	clear(r.members)
+	r.ended = true
+}
+
 func (r *Room) sendChat(userID int64, s Sender, in protocol.ChatSend) {
 	mem, ok := r.members[userID]
 	if !ok {
@@ -238,6 +251,13 @@ func (r *Room) snapshot() protocol.RoomState {
 		Media: r.pb.media, Playback: r.pb.state(time.Now()), Blockers: r.blockerList(),
 		Locked: r.pb.locked, Seq: r.pb.seq, Chat: chat,
 	}
+}
+
+func (r *Room) filmTitle() string {
+	if r.pb.media == nil {
+		return ""
+	}
+	return r.pb.media.Title
 }
 
 func (r *Room) onlineCount() int {

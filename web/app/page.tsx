@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { SignOutIcon } from "@phosphor-icons/react";
 import { api, cleanCode, type User } from "@/lib/api";
 import { Projector } from "@/components/projector";
@@ -61,10 +62,14 @@ function UserChip({ user, onSignedOut }: { user: User; onSignedOut: () => void }
   const [busy, setBusy] = useState(false);
   return (
     <div className="flex items-center gap-1">
-      <span className="mr-1 flex items-center gap-2.5 text-[14px] font-medium text-fog-300">
+      <Link
+        href="/me"
+        title="Your profile and rooms"
+        className="press mr-1 flex h-11 items-center gap-2.5 rounded-xl pr-3 pl-1.5 text-[14px] font-medium text-fog-300 hover:bg-white/5 hover:text-fog-50 max-sm:pr-1.5"
+      >
         <Avatar name={user.username} size={28} />
         <span className="max-sm:hidden">{user.username}</span>
-      </span>
+      </Link>
       <Button
         variant="ghost"
         size="icon"

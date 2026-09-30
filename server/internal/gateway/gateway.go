@@ -172,8 +172,12 @@ func (g *Gateway) attach(ctx context.Context, c *conn, h protocol.Hello) *sessio
 		UserID: c.user.ID, ResumeToken: token, ServerTime: protocol.UnixMs(time.Now()), Resumed: resumed, Room: room,
 	}))
 	if room != "" {
-		// Rooms are never deleted, so this only fails on a database error.
-		if _, err := g.rooms.Join(ctx, room, c.user, c); err != nil {
+		_, err := g.rooms.Join(ctx, room, c.user, c)
+		switch {
+		case errors.Is(err, rooms.ErrNotFound): // ended while this socket was away
+			g.setRoom(sess, c, "")
+			c.Send(protocol.EncodeError(protocol.ErrRoomNotFound, "That room has ended."))
+		case err != nil:
 			g.log.Error("rejoin on resume", "room", room, "err", err)
 			g.setRoom(sess, c, "")
 			c.Send(protocol.EncodeError(protocol.ErrInternal, "Couldn't rejoin the room."))

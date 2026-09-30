@@ -1,7 +1,9 @@
 # The binary is cross-compiled by deploy.sh (static, linux/amd64), so the 1 GB VM never
 # compiles Go: building modernc.org/sqlite needs more memory than the VM can spare.
 FROM alpine:3.22
-RUN adduser -D -H -u 10001 anda && mkdir /data && chown anda:anda /data
+# ffmpeg/ffprobe for HLS remuxing (stream copy only, no encoding). A package install, not a
+# compile, so this layer is cheap to build on the VM and cached afterwards.
+RUN apk add --no-cache ffmpeg && adduser -D -H -u 10001 anda && mkdir /data && chown anda:anda /data
 COPY bin/anda /usr/local/bin/anda
 USER anda
 ENV ANDA_ADDR=:8080 ANDA_DB=/data/anda.db
