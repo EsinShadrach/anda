@@ -64,12 +64,12 @@ export function Player({
   const preparing = media.state === "preparing" && progress?.state !== "ready";
   const failed = progress?.state === "failed" || progress?.state === "incompatible";
   const preparedTo = preparing ? (progress?.prepared_seconds ?? 0) : Infinity;
-  // Attach once enough exists past where the room is: 12s in from the start, or, after
-  // switching release mid-film, 12s past the room's position (the new copy is prepared
-  // from its start, so it has to catch up first). Once attached, stay attached.
+  // Attach once enough exists past where the room is: 6s in from the start (a few short
+  // segments), or, after switching release mid-film, 6s past the room's position (the new
+  // copy is prepared from its start, so it has to catch up first). Once attached, stay.
   const resumeAt = view.lastChange?.action === "switch" ? (view.playback?.position ?? 0) : 0;
   const [reached, setReached] = useState<number | null>(null);
-  const ready = !preparing || reached === media.id || preparedTo >= resumeAt + 12;
+  const ready = !preparing || reached === media.id || preparedTo >= resumeAt + 6;
   useEffect(() => {
     if (ready) setReached(media.id);
   }, [ready, media.id]);
@@ -711,9 +711,9 @@ function PreparingCard({
   compact?: boolean;
   resumeAt: number; // > 0: a switched release catching up to the room's position
 }) {
-  const catchingUp = resumeAt > 12;
+  const catchingUp = resumeAt > 6;
   const pct = catchingUp
-    ? Math.min(100, ((progress?.prepared_seconds ?? 0) / (resumeAt + 12)) * 100)
+    ? Math.min(100, ((progress?.prepared_seconds ?? 0) / (resumeAt + 6)) * 100)
     : progress?.direct
       ? Math.min(100, ((progress.prepared_seconds ?? 0) / (progress.duration || Infinity)) * 100)
       : progress && progress.size_bytes

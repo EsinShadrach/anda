@@ -38,6 +38,9 @@ export function RoomView({ code }: { code: string }) {
 
   useEffect(() => {
     conn.start();
+    // Fetch the player's hls.js now, while the socket connects, rather than after the
+    // room says which film is on: one round trip and ~130 KB off the first frame.
+    import("hls.js").catch(() => {});
     return () => conn.stop();
   }, [conn]);
 

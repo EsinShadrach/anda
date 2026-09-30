@@ -76,7 +76,13 @@ func outputArgs(p probe, playlistType string) []string {
 	}
 	args = append(args,
 		"-f", "hls",
-		"-hls_time", "6",
+		// Cut at the first keyframe after 2s (video is copied, so the source's keyframes set
+		// the real length, typically 2-5s). Short segments make the first frame and seeks
+		// fetch 2-3x less before playing; at ~150 ms RTT and ~17 Mbit/s measured to the VM,
+		// a 6-8s 1080p first segment alone took ~3s. Each segment starts with a keyframe,
+		// which independent_segments tells players (they can start or switch at any of them).
+		"-hls_time", "2",
+		"-hls_flags", "independent_segments",
 		"-hls_playlist_type", playlistType,
 		"-hls_segment_type", "fmp4",
 		"-hls_fmp4_init_filename", "init_%v.mp4",
