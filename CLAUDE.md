@@ -6,7 +6,7 @@ A watch-party web app: sign in, join a room, chat, and watch a film in sync. The
 
 **Stream sources:** the only built-in one is Blender's open films (Sintel, Big Buck Bunny, Cosmos Laundromat; Tears of Steel is WebM and correctly hidden), via WebTorrent's public torrents. Other Stremio stream addons are the user's choice: base URLs, comma-separated, in `ANDA_STREAM_ADDONS` in `~/anda/.env` on the VM. Don't add or suggest piracy addons (e.g. Torrentio) yourself.
 
-**Pulse is stopped** (since 2026-09-30, at the user's request, so Anda has the VM). With the torrent engine, Anda's limits total ~416 MB, so starting Pulse again would overcommit memory: ask first, and consider stopping `torrent` if Pulse must run. `docker compose stop` kept its containers and volumes; `cd ~/pulse && docker compose start` brings it back. Don't restart it unless asked.
+**Pulse and Anda run side by side** (since 2026-09-30, after the VM rebuild). What makes it fit: the VM has a 2 GB swap file (`/swapfile`, `vm.swappiness=10`, a safety net for spikes rather than working memory), Anda is down to three containers (the API serves the web app itself, via `internal/site`), and LiveKit is trimmed to 96 MB. Measured with both idle: Pulse ~130 MB, Anda ~105 MB, Caddy ~15 MB, ~420 MB available. The configured limits still add up to more than RAM (Pulse's are sized for its load tests), so heavy Pulse benchmarks plus a torrent download lean on swap; mention that when benchmarking.
 
 **UI:** "Screening room" direction: warm near-black, one ember accent, Geist + Geist Mono, a full-bleed stage with translucent glass chrome over it, and on phones chat is a sheet dragged over the film. Before any UI work load `frontend-dev` (visual rules and quality gates) and `apple-design` (materials, springs, gestures), plus `emil-design-eng` / `mobile-native` for polish and phone mechanics. Stack: Tailwind v4 (tokens in `web/app/globals.css` `@theme`), Motion, Phosphor icons (use the `*Icon` names; the bare ones are deprecated). Components live in `web/components/` (`ui/`, `home/`, `room/`, `profile/`, `projector.tsx`). The profile page is `/me`: rooms you've been in (`room_members`), rejoin, end (owner) or remove from your list.
 
@@ -32,8 +32,8 @@ Don't edit `pulse/` from here. The one file Anda needs to change outside itself 
 
 One shared VM, no domain:
 
-- **Host:** `ubuntu@102.211.122.78`, SSH key `~/Downloads/test-macbook-air.pem`. Apache CloudStack KVM, Ubuntu 24.04 (the VM was rebuilt from scratch on 2026-09-30: Docker was reinstalled from Docker's apt repo, and all data, including `~/anda/.env`, started over; Pulse isn't deployed on it).
-- **Size:** 1 vCPU, 957 MB RAM, **no swap**, 20 GB disk (~16 GB free).
+- **Host:** `ubuntu@102.211.122.78`, SSH key `~/Downloads/test-macbook-air.pem`. Apache CloudStack KVM, Ubuntu 24.04 (the VM was rebuilt from scratch on 2026-09-30: Docker was reinstalled from Docker's apt repo, and all data, including `~/anda/.env`, started over).
+- **Size:** 1 vCPU, 961 MB RAM, 2 GB swap file, 20 GB disk (~15 GB free).
 - **Tooling on the VM:** Docker 29 + Compose v5. No Go, Node or build tools, so build inside Docker images.
 - **Moving soon:** the user plans to move everything to a new VM (IP not known yet). Keep the host in one place (`HOST=` in `deploy.sh`) so the move is a one-line change.
 
@@ -43,7 +43,7 @@ Caddy (`proxy/`) is the only container that publishes ports (80/443). Projects j
 
 | URL | Goes to |
 |---|---|
-| https://anda.102-211-122-78.sslip.io | Anda: `/api/*`, `/ws` and `/media/*` → `anda-api:8080`, everything else → `anda-web:80` |
+| https://anda.102-211-122-78.sslip.io | Anda: `/livekit/*` → `anda-livekit:7880` (prefix stripped), everything else → `anda-api:8080` (it serves the web app too) |
 | https://pulse.102-211-122-78.sslip.io | Pulse |
 | http://102.211.122.78 (bare IP, also `localhost` on the VM) | Pulse. Keep it that way; Pulse's k6/bench scripts depend on it |
 
@@ -59,7 +59,7 @@ New routes (e.g. `/ws` for step 2) go in the `anda.{$SUFFIX}` block of `proxy/Ca
   - Declare `edge` as `external: true`.
 - **Memory limits:** set `mem_limit` on every service (see the budget below).
 - **Builds happen on the dev machine, not the VM.** Compiling `modernc.org/sqlite` or running `next build` needs more RAM than the VM can spare, and would skew Pulse's numbers. `deploy.sh` cross-compiles Go (`CGO_ENABLED=0 GOOS=linux GOARCH=amd64`) to `server/bin/anda` and builds `web/out/`; the Dockerfiles only copy those in (alpine for the API, nginx:alpine for the web). The Mac has no Docker.
-- Four containers: `api` (alias `anda-api`, 128 MB, includes ffmpeg), `web` (alias `anda-web`, 32 MB), `torrent` (`stremio/server`, 256 MB, internal only; the image is 1.7 GB), and `livekit` (alias `anda-livekit`, 128 MB; signalling through Caddy at `/livekit`). Total limits ~544 MB. No Node process of ours in production.
+- Three containers: `api` (alias `anda-api`, 128 MB, includes ffmpeg, and serves the Next.js export from `/srv/web`, staged into `server/bin/web` by `deploy.sh`), `torrent` (`stremio/server`, 256 MB, internal only; the image is 1.7 GB), and `livekit` (alias `anda-livekit`, 96 MB; signalling through Caddy at `/livekit`). Total limits ~480 MB. No Node process of ours in production. `deploy.sh` runs compose with `--remove-orphans`, so a dropped service really goes.
 - **The one exception to "never publish host ports":** `livekit` publishes UDP 7882, TCP 7881 and UDP 3478, because WebRTC media can't go through Caddy. Its key and secret (`LIVEKIT_KEY`, `LIVEKIT_SECRET`) and `LIVEKIT_NODE_IP` are generated into `~/anda/.env` by `deploy.sh` on first run. Local dev: build `livekit-server` from source (no macOS release binary), run it with `deploy/livekit.yaml`, and start the API with `ANDA_LIVEKIT_URL=ws://localhost:7880` plus the key and secret.
 - **`deploy.sh`**, modelled on `pulse/deploy.sh`:
   - `HOST`/`KEY` env overrides with the defaults above.

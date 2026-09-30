@@ -5,6 +5,8 @@ FROM alpine:3.22
 # compile, so this layer is cheap to build on the VM and cached afterwards.
 RUN apk add --no-cache ffmpeg && adduser -D -H -u 10001 anda && mkdir /data && chown anda:anda /data
 COPY bin/anda /usr/local/bin/anda
+# The web app (Next.js static export), staged into bin/web by deploy.sh; served by the API.
+COPY bin/web /srv/web
 USER anda
 ENV ANDA_ADDR=:8080 ANDA_DB=/data/anda.db
 EXPOSE 8080

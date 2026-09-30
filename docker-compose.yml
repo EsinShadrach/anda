@@ -1,6 +1,7 @@
-# Anda on the 1 vCPU / 1 GB VM. Limits total ~544 MB: that only fits while Pulse is stopped
-# (see CLAUDE.md). The torrent engine is the big one.
-# Caddy in ../proxy reaches us on the "edge" network as anda-api / anda-web / anda-livekit.
+# Anda on the 1 vCPU / 1 GB VM, alongside Pulse. Limits total ~480 MB; measured use is about
+# half that, and the VM has 2 GB of swap as a safety net for spikes. The torrent engine is
+# the big one. The API serves the web app itself (no separate web container).
+# Caddy in ../proxy reaches us on the "edge" network as anda-api / anda-livekit.
 # The only published ports are LiveKit's media ports: WebRTC is UDP and can't go through Caddy.
 services:
   api:
@@ -30,14 +31,6 @@ services:
         aliases: [anda-api]
     mem_limit: 128m
 
-  web:
-    build: ./web
-    restart: unless-stopped
-    networks:
-      edge:
-        aliases: [anda-web]
-    mem_limit: 32m
-
   # Stremio's streaming server: downloads torrents on demand and serves files as seekable
   # HTTP streams to the API's ffmpeg. Internal only (default network, no ports).
   torrent:
@@ -59,7 +52,7 @@ services:
     command: ["--config", "/etc/livekit.yaml", "--node-ip", "${LIVEKIT_NODE_IP:-127.0.0.1}"]
     environment:
       LIVEKIT_KEYS: "${LIVEKIT_KEY:-devkey}: ${LIVEKIT_SECRET:-}"
-      GOMEMLIMIT: 96MiB
+      GOMEMLIMIT: 64MiB   # it idles around 50 MB; a few small rooms stay well under
     volumes:
       - ./deploy/livekit.yaml:/etc/livekit.yaml:ro
     ports:
@@ -69,7 +62,7 @@ services:
     networks:
       edge:
         aliases: [anda-livekit]
-    mem_limit: 128m
+    mem_limit: 96m
     # Voice is real time: on the one vCPU it goes first when the torrent engine or an ffmpeg
     # remux is busy (default share is 1024). Only matters under contention.
     cpu_shares: 2048

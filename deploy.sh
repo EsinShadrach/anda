@@ -14,6 +14,9 @@ echo "==> go build (linux/amd64)"
 echo "==> next build"
 (cd web && { [ -d node_modules ] || npm ci; } && npm run build)
 
+# The API serves the web app too (no separate web container): stage the export beside it.
+rm -rf server/bin/web && cp -R web/out server/bin/web
+
 echo "==> sync"
 rsync -az --delete -e "ssh -i $KEY" \
   --exclude .git --exclude .claude --exclude node_modules --exclude .next --exclude .env --exclude '*.db*' \
@@ -26,6 +29,6 @@ $SSH "cd ~/anda && touch .env && \
 
 $SSH 'cd ~/anda && \
   { docker network inspect edge >/dev/null 2>&1 || docker network create edge; } && \
-  docker compose up -d --build && docker compose ps'
+  docker compose up -d --build --remove-orphans && docker compose ps'
 
 echo "Anda: https://anda.$(echo "${HOST#*@}" | tr . -).sslip.io"

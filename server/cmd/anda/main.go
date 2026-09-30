@@ -19,6 +19,7 @@ import (
 	"anda/internal/library"
 	"anda/internal/media"
 	"anda/internal/rooms"
+	"anda/internal/site"
 	"anda/internal/store"
 	"anda/internal/torrent"
 	"anda/internal/voice"
@@ -104,6 +105,8 @@ func run(log *slog.Logger) error {
 		Authenticate: authSvc.UserFromRequest,
 		Log:          log,
 	}).Register(mux)
+	// Everything else is the web app (the Next.js static export copied into the image).
+	mux.Handle("/", site.Handler{Dir: env("ANDA_WEB", "/srv/web")})
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		if err := db.Ping(r.Context()); err != nil {
 			http.Error(w, "db unavailable", http.StatusServiceUnavailable)
