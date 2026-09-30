@@ -4,7 +4,10 @@
 # Caddy in ../proxy reaches us on the "edge" network as anda-api / anda-livekit.
 # The only published ports are LiveKit's media ports: WebRTC is UDP and can't go through Caddy.
 services:
-  api:
+  # Named anda-api, not api: Compose registers each service's name on every network it joins,
+  # and on the shared "edge" network a plain "api" would answer Pulse's lookups for its own
+  # api (Pulse's nginx then got Anda's API and 502'd).
+  anda-api:
     build: ./server
     restart: unless-stopped
     environment:
