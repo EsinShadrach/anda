@@ -6,7 +6,7 @@ A watch-party web app: sign in, join a room, chat, and watch a film in sync. The
 
 **Pulse is stopped** (since 2026-09-30, at the user's request, so Anda has the VM). `docker compose stop` kept its containers and volumes; `cd ~/pulse && docker compose start` brings it back. Don't restart it unless asked.
 
-**UI:** load the design skills (`emil-design-eng`, plus `mobile-native` for layout/touch and `animate` for motion) before building UI. Tokens and base components live in `web/app/globals.css`.
+**UI:** "Screening room" direction: warm near-black, one ember accent, Geist + Geist Mono, a full-bleed stage with translucent glass chrome over it, and on phones chat is a sheet dragged over the film. Before any UI work load `frontend-dev` (visual rules and quality gates) and `apple-design` (materials, springs, gestures), plus `emil-design-eng` / `mobile-native` for polish and phone mechanics. Stack: Tailwind v4 (tokens in `web/app/globals.css` `@theme`), Motion, Phosphor icons (use the `*Icon` names; the bare ones are deprecated). Components live in `web/components/` (`ui/`, `home/`, `room/`, `projector.tsx`).
 
 **Stack:** Go API in `server/` (`net/http`, SQLite via `modernc.org/sqlite`, goose migrations embedded from `server/migrations`, argon2id, `coder/websocket`), Next.js static export in `web/`. Server packages: `auth`, `rooms` (one goroutine per room), `gateway` (sockets, resume, replaced), `protocol` (message types, names exactly as in the plan), `store`, `httpx`. Rooms are at `/room?code=XXXXXX` (query string because the export is static).
 

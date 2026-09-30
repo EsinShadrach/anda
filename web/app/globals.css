@@ -1,332 +1,169 @@
-:root {
-  --bg: #f5f4f0;
-  --surface: #ffffff;
-  --surface-2: #efede7;
-  --text: #1b1a17;
-  --muted: #6d6a62;
-  --faint: #a19d93;
-  --border: #e3e0d8;
-  --accent: #d9480f;
-  --accent-press: #bf3f0d;
-  --accent-text: #ffffff;
-  --online: #2f9e44;
-  --away: #e8a317;
-  --error: #c92a2a;
-  --stage: #0e0d0c;
-  --stage-text: #d8d4cb;
+@import "tailwindcss";
 
-  --radius: 12px;
-  --radius-sm: 8px;
-  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
-  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+/* Screening room: warm near-black, one ember accent, glass chrome over the stage. */
+@theme {
+  --color-ink-950: #0b0a09;
+  --color-ink-900: #11100e;
+  --color-ink-850: #171513;
+  --color-ink-800: #1e1c19;
+  --color-ink-700: #2a2723;
+  --color-ink-600: #3a3631;
+
+  --color-fog-50: #f7f4ee;
+  --color-fog-100: #eeeae2;
+  --color-fog-300: #c6c0b5;
+  --color-fog-500: #948e83;
+  --color-fog-600: #6f6a61;
+
+  --color-ember-300: #f6b88e;
+  --color-ember-400: #ee9a63;
+  --color-ember-500: #e8834a;
+  --color-ember-600: #cf6d36;
+
+  --color-live: #63cf8e;
+  --color-away: #e6b54c;
+  --color-danger: #ef7a6d;
+
+  --font-sans: var(--font-geist-sans), system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+
+  --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out-strong: cubic-bezier(0.77, 0, 0.175, 1);
+
+  --animate-spin-fast: spin 0.6s linear infinite;
+  --animate-shimmer: shimmer 1.4s ease-in-out infinite;
+  --animate-shake: shake 360ms var(--ease-out-strong);
+
+  @keyframes shimmer {
+    0% {
+      background-position: 100% 0;
+    }
+    100% {
+      background-position: -100% 0;
+    }
+  }
+
+  @keyframes shake {
+    0%,
+    100% {
+      transform: translateX(0);
+    }
+    20% {
+      transform: translateX(-6px);
+    }
+    40% {
+      transform: translateX(5px);
+    }
+    60% {
+      transform: translateX(-3px);
+    }
+    80% {
+      transform: translateX(2px);
+    }
+  }
 }
 
-@media (prefers-color-scheme: dark) {
+@layer base {
   :root {
-    --bg: #111010;
-    --surface: #1a1918;
-    --surface-2: #232220;
-    --text: #f1eee8;
-    --muted: #9d998f;
-    --faint: #6b675f;
-    --border: #2c2a27;
-    --accent: #ff7a3d;
-    --accent-press: #f06a2b;
-    --accent-text: #161412;
-    --online: #51cf66;
-    --away: #fcc419;
-    --error: #ff8787;
-    --stage: #070706;
+    color-scheme: dark;
+  }
+
+  html {
+    background: var(--color-ink-950);
+    color: var(--color-fog-100);
+    -webkit-tap-highlight-color: transparent;
+    -webkit-text-size-adjust: 100%;
+    overscroll-behavior: none;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: "ss01", "cv11";
+  }
+
+  input,
+  textarea,
+  select {
+    font-size: 16px; /* below 16px iOS zooms the page on focus */
+  }
+
+  button,
+  a,
+  [role="button"] {
+    touch-action: manipulation;
+  }
+
+  button,
+  [role="button"],
+  [role="tab"] {
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: default;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-ember-400);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--color-ember-500) 40%, transparent);
   }
 }
 
-* {
-  box-sizing: border-box;
+/* Floating chrome: translucent, with a bright top edge where light catches it. */
+@utility glass {
+  background: color-mix(in oklab, var(--color-ink-900) 62%, transparent);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.07),
+    inset 0 0 0 1px rgb(255 255 255 / 0.05),
+    0 12px 40px rgb(0 0 0 / 0.35);
 }
 
-html {
-  -webkit-tap-highlight-color: transparent;
-  -webkit-text-size-adjust: 100%;
-  overscroll-behavior: none;
+/* Heavier material for large surfaces (chat panel, sheet, dialogs). */
+@utility glass-thick {
+  background: color-mix(in oklab, var(--color-ink-900) 78%, transparent);
+  backdrop-filter: blur(40px) saturate(150%);
+  -webkit-backdrop-filter: blur(40px) saturate(150%);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.08),
+    inset 0 0 0 1px rgb(255 255 255 / 0.05),
+    0 24px 64px rgb(0 0 0 / 0.5);
 }
 
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
-  -webkit-font-smoothing: antialiased;
-}
-
-input,
-textarea,
-select {
-  font-size: 16px; /* below 16px iOS zooms the page on focus */
-}
-
-button,
-a,
-[role="button"] {
-  touch-action: manipulation;
-}
-
-button,
-[role="button"],
-[role="tab"] {
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-/* ---------- Buttons ---------- */
-
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-height: 44px;
-  padding: 10px 16px;
-  font: inherit;
-  font-weight: 600;
-  color: var(--accent-text);
-  background: var(--accent);
-  border: 0;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition:
-    transform 140ms var(--ease-out),
-    background-color 140ms ease,
-    opacity 140ms ease;
-}
-
-.btn:active:not(:disabled) {
-  transform: scale(0.97);
-  background: var(--accent-press);
-}
-
-.btn:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.btn-ghost {
-  color: var(--text);
-  background: transparent;
-  border: 1px solid var(--border);
-}
-
-.btn-ghost:active:not(:disabled) {
-  background: var(--surface-2);
-}
-
-.btn-quiet {
-  min-height: 36px;
-  padding: 6px 10px;
-  color: var(--muted);
-  background: transparent;
-  font-weight: 500;
-}
-
-.btn-quiet:active:not(:disabled) {
-  background: var(--surface-2);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .btn:hover:not(:disabled) {
-    background: var(--accent-press);
-  }
-  .btn-ghost:hover:not(:disabled),
-  .btn-quiet:hover:not(:disabled) {
-    background: var(--surface-2);
-    color: var(--text);
+/* Pressable: instant feedback on press, for every input type. */
+@utility press {
+  transition-property: transform, background-color, color, opacity, box-shadow;
+  transition-duration: 140ms;
+  transition-timing-function: var(--ease-out-strong);
+  &:active:not(:disabled) {
+    transform: scale(0.97);
   }
 }
 
-:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+@utility skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--color-ink-800) 0%,
+    var(--color-ink-700) 50%,
+    var(--color-ink-800) 100%
+  );
+  background-size: 200% 100%;
+  animation: var(--animate-shimmer);
 }
 
-/* ---------- Fields ---------- */
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 14px;
-  font-weight: 500;
-}
-
-.input {
-  width: 100%;
-  min-height: 44px;
-  padding: 10px 12px;
-  font: inherit;
-  font-size: 16px;
-  font-weight: 400;
-  color: inherit;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  transition: border-color 140ms ease;
-}
-
-.input:focus-visible {
-  outline: none;
-  border-color: var(--accent);
-}
-
-.input::placeholder {
-  color: var(--faint);
-}
-
-/* ---------- Home ---------- */
-
-.home {
-  max-width: 420px;
-  margin: 0 auto;
-  padding: max(56px, env(safe-area-inset-top)) 16px max(32px, env(safe-area-inset-bottom));
-}
-
-.home-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 40px;
-}
-
-.brand {
-  margin: 0;
-  font-size: 40px;
-  font-weight: 700;
-  letter-spacing: -0.03em;
-  line-height: 1;
-}
-
-.brand-dot {
-  color: var(--accent);
-}
-
-.tagline {
-  margin: 8px 0 0;
-  color: var(--muted);
-}
-
-.whoami {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 14px;
-  color: var(--muted);
-}
-
-.card {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  padding: 24px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-
-.card p {
-  margin: 0;
-}
-
-.card-title {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-}
-
-.muted {
-  color: var(--muted);
-}
-
-.hint {
-  margin: 0;
-  font-size: 14px;
-  color: var(--muted);
-}
-
-.error-text {
-  margin: 0;
-  font-size: 14px;
-  color: var(--error);
-}
-
-.or {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-size: 13px;
-  color: var(--faint);
-}
-
-.or::before,
-.or::after {
-  content: "";
-  flex: 1;
-  height: 1px;
-  background: var(--border);
-}
-
-.join-row {
-  display: flex;
-  gap: 8px;
-}
-
-.code-input {
-  flex: 1;
-  min-width: 0;
-  font-family: var(--mono);
-  font-size: 20px;
-  letter-spacing: 0.3em;
-  text-transform: uppercase;
-  text-align: center;
-}
-
-.code-input::placeholder {
-  letter-spacing: 0.3em;
-}
-
-.tabs {
-  display: flex;
-  gap: 4px;
-  padding: 4px;
-  background: var(--surface-2);
-  border-radius: var(--radius-sm);
-}
-
-.tab {
-  flex: 1;
-  min-height: 36px;
-  font: inherit;
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--muted);
-  background: transparent;
-  border: 0;
-  border-radius: 6px;
-  cursor: pointer;
+/* Short fade-up for content that arrives while you watch. Never from nothing. */
+@utility enter {
   transition:
-    background-color 160ms ease,
-    color 160ms ease;
-}
-
-.tab[aria-selected="true"] {
-  background: var(--surface);
-  color: var(--text);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
-}
-
-/* Entering content: a short fade-up, never from nothing. */
-.enter {
-  transition:
-    opacity 220ms var(--ease-out),
-    transform 220ms var(--ease-out);
+    opacity 240ms var(--ease-out-strong),
+    transform 240ms var(--ease-out-strong);
   @starting-style {
     opacity: 0;
     transform: translateY(6px);
@@ -338,5 +175,25 @@ button,
     @starting-style {
       transform: none;
     }
+  }
+  .skeleton {
+    animation: none;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .glass,
+  .glass-thick {
+    background: var(--color-ink-850);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .glass,
+  .glass-thick {
+    background: var(--color-ink-900);
+    box-shadow: inset 0 0 0 1px var(--color-fog-500);
   }
 }

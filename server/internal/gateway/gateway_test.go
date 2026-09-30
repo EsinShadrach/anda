@@ -234,6 +234,37 @@ func TestResumeAndReplace(t *testing.T) {
 	}
 }
 
+// A session that left its room (e.g. tried a bad code) resumes with no room, so the client
+// knows to join rather than wait for a room_state that isn't coming.
+func TestResumeOutsideRoom(t *testing.T) {
+	e := newEnv(t)
+	rafe := e.signup("rafe")
+	code := e.createRoom(rafe)
+
+	a := e.dial(rafe)
+	w := a.hello("")
+	a.send(protocol.TypeJoinRoom, protocol.JoinRoom{Code: code})
+	a.expect(protocol.TypeRoomState, nil)
+	a.send(protocol.TypeJoinRoom, protocol.JoinRoom{Code: "ZZZZZZ"})
+	a.expect(protocol.TypeError, nil)
+	a.ws.CloseNow()
+
+	a2 := e.dial(rafe)
+	w2 := a2.hello(w.ResumeToken)
+	if !w2.Resumed || w2.Room != "" {
+		t.Fatalf("resume outside a room: %+v", w2)
+	}
+	a2.send(protocol.TypeJoinRoom, protocol.JoinRoom{Code: code})
+	a2.expect(protocol.TypeRoomState, nil)
+
+	a2.ws.CloseNow()
+	a3 := e.dial(rafe)
+	if w3 := a3.hello(w2.ResumeToken); w3.Room != code {
+		t.Fatalf("resume inside a room: %+v", w3)
+	}
+	a3.expect(protocol.TypeRoomState, nil)
+}
+
 func TestBadVersionAndUnauthenticated(t *testing.T) {
 	e := newEnv(t)
 	res, err := http.Get(e.srv.URL + "/ws")

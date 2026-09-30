@@ -2,214 +2,99 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, ApiError, cleanCode, rooms, type User } from "@/lib/api";
+import { SignOutIcon } from "@phosphor-icons/react";
+import { api, cleanCode, type User } from "@/lib/api";
+import { Projector } from "@/components/projector";
+import { Wordmark } from "@/components/ui/wordmark";
+import { Avatar } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
+import { AuthPanel } from "@/components/home/auth-panel";
+import { Lobby } from "@/components/home/lobby";
 
 export default function Home() {
   const router = useRouter();
   const [user, setUser] = useState<User | null | undefined>(undefined);
+  const [next, setNext] = useState<string | null>(null);
 
   useEffect(() => {
+    const n = new URLSearchParams(location.search).get("next");
+    setNext(n?.startsWith("/room?") ? n : null);
     api.me().then(setUser, () => setUser(null));
   }, []);
 
-  // Back to the invite link that sent a signed-out visitor here.
+  const inviteCode = next ? cleanCode(new URLSearchParams(next.slice(6)).get("code") ?? "") : undefined;
+
   function onAuthed(u: User) {
-    const next = new URLSearchParams(location.search).get("next");
-    if (next?.startsWith("/room?")) {
-      router.replace(next);
+    if (next) {
+      router.replace(next); // back to the invite that sent them here
       return;
     }
     setUser(u);
   }
 
   return (
-    <main className="home">
-      <header className="home-top">
-        <div>
-          <h1 className="brand">
-            Anda<span className="brand-dot">.</span>
-          </h1>
-          <p className="tagline">Watch movies together.</p>
+    <main className="relative grid min-h-[100dvh] lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
+      <section className="flex flex-col px-5 pt-[max(12px,env(safe-area-inset-top))] pb-[max(28px,env(safe-area-inset-bottom))] sm:px-10 lg:px-14">
+        {/* On phones the header floats over the top of the projector, so the brand leads. */}
+        <header className="z-10 flex h-16 items-center justify-between max-lg:absolute max-lg:inset-x-2 max-lg:top-[max(8px,env(safe-area-inset-top))] max-lg:px-4 max-sm:h-14">
+          <Wordmark />
+          {user && <UserChip user={user} onSignedOut={() => setUser(null)} />}
+        </header>
+        <div className="flex max-w-[440px] flex-1 flex-col justify-center py-8 max-lg:pt-7 lg:py-12">
+          {user === undefined ? (
+            <HomeSkeleton />
+          ) : user ? (
+            <Lobby user={user} />
+          ) : (
+            <AuthPanel onAuthed={onAuthed} inviteCode={inviteCode || undefined} />
+          )}
         </div>
-        {user && <SignOut user={user} onDone={() => setUser(null)} />}
-      </header>
-      {user === undefined ? null : user ? <Lobby /> : <AuthForm onAuthed={onAuthed} />}
+      </section>
+      <div className="order-first p-2 pb-0 sm:p-3 lg:order-none lg:p-3 lg:pl-0">
+        <Projector className="relative h-[30svh] rounded-[24px] sm:h-[38svh] lg:sticky lg:top-3 lg:h-[calc(100dvh-24px)] lg:rounded-[28px]" />
+      </div>
     </main>
   );
 }
 
-function SignOut({ user, onDone }: { user: User; onDone: () => void }) {
+function UserChip({ user, onSignedOut }: { user: User; onSignedOut: () => void }) {
   const [busy, setBusy] = useState(false);
   return (
-    <div className="whoami">
-      <span>{user.username}</span>
-      <button
-        className="btn btn-quiet"
-        disabled={busy}
+    <div className="flex items-center gap-1">
+      <span className="mr-1 flex items-center gap-2.5 text-[14px] font-medium text-fog-300">
+        <Avatar name={user.username} size={28} />
+        <span className="max-sm:hidden">{user.username}</span>
+      </span>
+      <Button
+        variant="ghost"
+        size="icon"
+        loading={busy}
+        aria-label="Log out"
+        title="Log out"
         onClick={async () => {
           setBusy(true);
           try {
             await api.logout();
-            onDone();
+            onSignedOut();
           } finally {
             setBusy(false);
           }
         }}
       >
-        Log out
-      </button>
+        <SignOutIcon size={20} />
+      </Button>
     </div>
   );
 }
 
-function Lobby() {
-  const router = useRouter();
-  const [code, setCode] = useState("");
-  const [creating, setCreating] = useState(false);
-  const [joining, setJoining] = useState(false);
-  const [error, setError] = useState("");
-
-  async function create() {
-    setError("");
-    setCreating(true);
-    try {
-      const room = await rooms.create();
-      router.push(`/room?code=${room.code}`);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't reach the server.");
-      setCreating(false);
-    }
-  }
-
-  async function join(e: React.SubmitEvent<HTMLFormElement>) {
-    e.preventDefault();
-    if (code.length !== 6) return;
-    setError("");
-    setJoining(true);
-    try {
-      const room = await rooms.get(code);
-      router.push(`/room?code=${room.code}`);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't reach the server.");
-      setJoining(false);
-    }
-  }
-
+function HomeSkeleton() {
   return (
-    <div className="card enter">
-      <h2 className="card-title">Start a watch party</h2>
-      <p className="hint">You'll get a code to share with friends.</p>
-      <button className="btn" onClick={create} disabled={creating}>
-        {creating ? "Creating…" : "Start a room"}
-      </button>
-      <div className="or">or join one</div>
-      <form className="join-row" onSubmit={join}>
-        <input
-          className="input code-input"
-          value={code}
-          onChange={(e) => setCode(cleanCode(e.target.value))}
-          placeholder="••••••"
-          aria-label="Room code"
-          autoCapitalize="characters"
-          autoComplete="off"
-          autoCorrect="off"
-          spellCheck={false}
-          enterKeyHint="go"
-        />
-        <button className="btn btn-ghost" disabled={code.length !== 6 || joining}>
-          Join
-        </button>
-      </form>
-      {error && (
-        <p className="error-text" role="alert">
-          {error}
-        </p>
-      )}
+    <div className="flex flex-col gap-4" aria-label="Loading" aria-busy>
+      <div className="skeleton h-11 w-4/5 rounded-xl" />
+      <div className="skeleton h-11 w-3/5 rounded-xl" />
+      <div className="skeleton mt-2 h-5 w-full rounded-lg" />
+      <div className="skeleton h-5 w-2/3 rounded-lg" />
+      <div className="skeleton mt-6 h-14 w-full max-w-[360px] rounded-2xl" />
     </div>
-  );
-}
-
-type Mode = "login" | "signup";
-
-function AuthForm({ onAuthed }: { onAuthed: (u: User) => void }) {
-  const [mode, setMode] = useState<Mode>("login");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  async function submit(e: React.SubmitEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setError("");
-    setBusy(true);
-    try {
-      const u = mode === "login" ? await api.login(username, password) : await api.signup(username, password);
-      onAuthed(u);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't reach the server.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <form className="card enter" onSubmit={submit}>
-      <div className="tabs" role="tablist">
-        {(["login", "signup"] as const).map((m) => (
-          <button
-            key={m}
-            type="button"
-            role="tab"
-            aria-selected={mode === m}
-            className="tab"
-            onClick={() => {
-              setMode(m);
-              setError("");
-            }}
-          >
-            {m === "login" ? "Log in" : "Sign up"}
-          </button>
-        ))}
-      </div>
-      <label className="field">
-        Username
-        <input
-          className="input"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          autoComplete="username"
-          autoCapitalize="none"
-          autoCorrect="off"
-          spellCheck={false}
-          required
-          minLength={3}
-          maxLength={20}
-          pattern="[A-Za-z0-9_]+"
-          title="Letters, numbers and underscores"
-        />
-      </label>
-      <label className="field">
-        Password
-        <input
-          className="input"
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          autoComplete={mode === "login" ? "current-password" : "new-password"}
-          required
-          minLength={mode === "signup" ? 8 : undefined}
-          enterKeyHint="go"
-        />
-      </label>
-      {mode === "signup" && <p className="hint">3–20 letters, numbers or underscores. Password at least 8 characters.</p>}
-      {error && (
-        <p className="error-text" role="alert">
-          {error}
-        </p>
-      )}
-      <button type="submit" className="btn" disabled={busy}>
-        {busy ? "…" : mode === "login" ? "Log in" : "Create account"}
-      </button>
-    </form>
   );
 }

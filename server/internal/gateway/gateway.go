@@ -164,13 +164,19 @@ func (g *Gateway) attach(ctx context.Context, c *conn, h protocol.Hello) *sessio
 		}
 	}
 
+	room := ""
+	if resumed {
+		room = code
+	}
 	c.Send(protocol.Encode(protocol.TypeWelcome, protocol.Welcome{
-		UserID: c.user.ID, ResumeToken: token, ServerTime: protocol.UnixMs(time.Now()), Resumed: resumed,
+		UserID: c.user.ID, ResumeToken: token, ServerTime: protocol.UnixMs(time.Now()), Resumed: resumed, Room: room,
 	}))
-	if resumed && code != "" {
-		if _, err := g.rooms.Join(ctx, code, c.user, c); err != nil {
+	if room != "" {
+		// Rooms are never deleted, so this only fails on a database error.
+		if _, err := g.rooms.Join(ctx, room, c.user, c); err != nil {
+			g.log.Error("rejoin on resume", "room", room, "err", err)
 			g.setRoom(sess, c, "")
-			c.Send(protocol.EncodeError(protocol.ErrRoomNotFound, "That room is gone."))
+			c.Send(protocol.EncodeError(protocol.ErrInternal, "Couldn't rejoin the room."))
 		}
 	}
 	return sess

@@ -1,0 +1,210 @@
+/* All motion here is slow and decorative: transform/opacity only, paused for reduced motion. */
+
+/* No position here: callers set it (relative, absolute or fixed) with a utility class. */
+.root {
+  overflow: hidden;
+  isolation: isolate;
+  background: radial-gradient(120% 90% at 50% 10%, #1b1714 0%, var(--color-ink-950) 70%);
+  contain: layout paint;
+}
+
+/* ---- The screen, and the light playing on it ---- */
+
+.screen {
+  position: absolute;
+  left: 9%;
+  right: 9%;
+  top: 20%;
+  aspect-ratio: 2.39 / 1;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #3a2e26;
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 0.04),
+    0 30px 120px 10px rgb(232 131 74 / 0.22),
+    0 0 240px 40px rgb(232 131 74 / 0.08);
+  transform: perspective(900px) rotateX(4deg);
+}
+
+.stage .screen {
+  inset: 0;
+  aspect-ratio: auto;
+  border-radius: 0;
+  transform: none;
+  box-shadow: none;
+  background: #14110f;
+}
+
+.light {
+  position: absolute;
+  inset: -40%;
+  background:
+    radial-gradient(32% 42% at 28% 42%, rgb(255 206 160 / 0.75), transparent 70%),
+    radial-gradient(30% 40% at 74% 58%, rgb(118 146 170 / 0.55), transparent 70%),
+    radial-gradient(40% 50% at 55% 22%, rgb(240 160 104 / 0.5), transparent 70%),
+    radial-gradient(60% 60% at 50% 90%, rgb(40 52 64 / 0.6), transparent 70%);
+  filter: blur(16px);
+  animation: drift 26s ease-in-out infinite alternate;
+}
+
+.stage .light,
+.stage .light2 {
+  opacity: 0.35;
+  filter: blur(60px);
+}
+
+.light2 {
+  position: absolute;
+  inset: -40%;
+  filter: blur(18px);
+  background:
+    radial-gradient(26% 36% at 64% 34%, rgb(255 232 208 / 0.5), transparent 70%),
+    radial-gradient(34% 44% at 22% 72%, rgb(207 109 54 / 0.45), transparent 70%);
+  animation: drift2 34s ease-in-out infinite alternate;
+}
+
+/* Vignette + scanline texture so it reads as a projected image, not a gradient. */
+.screen::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(120% 120% at 50% 50%, transparent 55%, rgb(0 0 0 / 0.55) 100%),
+    repeating-linear-gradient(0deg, rgb(0 0 0 / 0.06) 0 1px, transparent 1px 3px);
+}
+
+/* ---- The beam from the booth, with dust in it ---- */
+
+.beam {
+  position: absolute;
+  left: 50%;
+  top: -4%;
+  width: 82%;
+  height: 34%;
+  transform: translateX(-50%);
+  background: linear-gradient(180deg, rgb(255 236 220 / 0.1), rgb(255 236 220 / 0.035) 75%, transparent);
+  clip-path: polygon(44% 0, 56% 0, 100% 100%, 0 100%);
+  mask-image: linear-gradient(90deg, transparent, #000 25%, #000 75%, transparent);
+  filter: blur(10px);
+  mix-blend-mode: screen;
+  animation: flicker 9s steps(1) infinite;
+}
+
+/* Light from the screen pooling on the floor and seat rows. */
+.floor {
+  position: absolute;
+  left: 5%;
+  right: 5%;
+  top: 48%;
+  height: 40%;
+  background: radial-gradient(50% 60% at 50% 0%, rgb(232 131 74 / 0.16), transparent 70%);
+  filter: blur(20px);
+}
+
+.dust {
+  position: absolute;
+  left: 32%;
+  right: 32%;
+  top: 0;
+  height: 28%;
+  mix-blend-mode: screen;
+}
+
+.dust span {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background: rgb(255 240 225 / 0.7);
+  filter: blur(0.5px);
+  animation: float 18s linear infinite;
+}
+
+.dust span:nth-child(1) { left: 20%; top: 60%; animation-duration: 21s; }
+.dust span:nth-child(2) { left: 45%; top: 30%; animation-duration: 17s; animation-delay: -6s; }
+.dust span:nth-child(3) { left: 70%; top: 75%; animation-duration: 24s; animation-delay: -12s; }
+.dust span:nth-child(4) { left: 55%; top: 50%; animation-duration: 19s; animation-delay: -3s; opacity: 0.5; }
+.dust span:nth-child(5) { left: 35%; top: 85%; animation-duration: 26s; animation-delay: -9s; opacity: 0.6; }
+
+/* ---- Seats in the foreground ---- */
+
+.seats {
+  position: absolute;
+  inset: auto 0 0;
+  width: 100%;
+  height: 30%;
+  color: var(--color-ink-950);
+}
+
+/* ---- Film grain over everything ---- */
+
+.grain {
+  position: absolute;
+  inset: -50%;
+  opacity: 0.07;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  animation: grain 1s steps(4) infinite;
+}
+
+/* ---- Lights off (room not found) ---- */
+
+.off .light,
+.off .light2,
+.off .beam,
+.off .dust,
+.off .floor {
+  display: none;
+}
+
+.off .screen {
+  background: #151311;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.04);
+}
+
+@keyframes drift {
+  from { transform: translate3d(-6%, -4%, 0) scale(1); }
+  to { transform: translate3d(6%, 5%, 0) scale(1.12); }
+}
+
+@keyframes drift2 {
+  from { transform: translate3d(5%, 4%, 0) scale(1.1); }
+  to { transform: translate3d(-7%, -3%, 0) scale(1); }
+}
+
+/* Irregular, small dips: a lamp, not a strobe (well under 3 changes a second). */
+@keyframes flicker {
+  0%, 100% { opacity: 1; }
+  37% { opacity: 0.92; }
+  38% { opacity: 1; }
+  71% { opacity: 0.95; }
+  72% { opacity: 1; }
+}
+
+@keyframes float {
+  from { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(14px, -40px, 0); }
+  to { transform: translate3d(-8px, -90px, 0); opacity: 0; }
+}
+
+@keyframes grain {
+  0% { transform: translate(0, 0); }
+  25% { transform: translate(-3%, 2%); }
+  50% { transform: translate(2%, -3%); }
+  75% { transform: translate(-2%, -1%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .light,
+  .light2,
+  .beam,
+  .dust span,
+  .grain {
+    animation: none;
+  }
+}
+
+/* No picture, no rim light on the seats. */
+.off .seats g:last-of-type {
+  display: none;
+}

@@ -184,8 +184,8 @@ export class RoomConnection {
         this.attempt = 0;
         writeToken(payload.resume_token);
         this.set({ status: "open", me: payload.user_id });
-        // A resumed session gets room_state without asking; a fresh one joins.
-        if (!payload.resumed) this.send("join_room", { code: this.view.code });
+        // A session resumed into this room gets room_state without asking; otherwise join.
+        if (payload.room !== this.view.code) this.send("join_room", { code: this.view.code });
         break;
       }
       case "room_state": {

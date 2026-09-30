@@ -47,9 +47,11 @@ type Welcome struct {
 	UserID      int64  `json:"user_id"`
 	ResumeToken string `json:"resume_token"`
 	ServerTime  int64  `json:"server_time"` // unix ms
-	// Resumed is true when the resume token was accepted; the server then re-attaches the
-	// socket to its room and sends room_state without the client asking.
+	// Resumed is true when the resume token was accepted.
 	Resumed bool `json:"resumed"`
+	// Room is the room a resumed session is put back into ("" if none); room_state for it
+	// follows without asking. The client sends join_room whenever this isn't its room.
+	Room string `json:"room,omitempty"`
 }
 
 type JoinRoom struct {
