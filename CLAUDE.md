@@ -2,9 +2,15 @@
 
 A watch-party web app: sign in, join a room, chat, and watch a film in sync. The full plan (build order, WebSocket protocol, "done when" per step) is the Claude Doc "Anda — Watch Party App Plan": https://claude.ai/artifact/HTWvaFVXutdVXcTuJTzwPY. Read it with the docs tools before starting a step.
 
-**Status:** step 1 (auth) is done and deployed. Next is step 2 (rooms and chat over WebSockets).
+**Status:** steps 1 (auth) and 2 (rooms, chat, presence over WebSockets) are done and deployed. Next is step 3 (synced playback with a static MP4).
 
-**Stack:** Go API in `server/` (`net/http`, SQLite via `modernc.org/sqlite`, goose migrations embedded from `server/migrations`, argon2id), Next.js static export in `web/`. Ask before adding dependencies the plan doesn't list.
+**Pulse is stopped** (since 2026-09-30, at the user's request, so Anda has the VM). `docker compose stop` kept its containers and volumes; `cd ~/pulse && docker compose start` brings it back. Don't restart it unless asked.
+
+**UI:** load the design skills (`emil-design-eng`, plus `mobile-native` for layout/touch and `animate` for motion) before building UI. Tokens and base components live in `web/app/globals.css`.
+
+**Stack:** Go API in `server/` (`net/http`, SQLite via `modernc.org/sqlite`, goose migrations embedded from `server/migrations`, argon2id, `coder/websocket`), Next.js static export in `web/`. Server packages: `auth`, `rooms` (one goroutine per room), `gateway` (sockets, resume, replaced), `protocol` (message types, names exactly as in the plan), `store`, `httpx`. Rooms are at `/room?code=XXXXXX` (query string because the export is static).
+
+**Local dev:** run the API with `ANDA_WS_ORIGINS=localhost:3000 go run ./cmd/anda` in `server/`, and `npm run dev` in `web/` (it proxies `/api` to :8080; the socket goes straight to `ws://localhost:8080/ws`). Fast Refresh remounts rooms in every open tab, so with two tabs open they can replace each other in dev only. Ask before adding dependencies the plan doesn't list.
 
 **The plan assumes a VM of its own; this one is shared with Pulse.** Its memory table (Stremio server 200–400 MB, ffmpeg, "add swap") doesn't fit here. Steps 1–3 fit; steps 4–5 (ffmpeg remux, Stremio's streaming server) need a decision with the user before they're built.
 
@@ -35,7 +41,7 @@ Caddy (`proxy/`) is the only container that publishes ports (80/443). Projects j
 
 | URL | Goes to |
 |---|---|
-| https://anda.102-211-122-78.sslip.io | Anda: `/api/*` → `anda-api:8080`, everything else → `anda-web:80` |
+| https://anda.102-211-122-78.sslip.io | Anda: `/api/*` and `/ws` → `anda-api:8080`, everything else → `anda-web:80` |
 | https://pulse.102-211-122-78.sslip.io | Pulse |
 | http://102.211.122.78 (bare IP, also `localhost` on the VM) | Pulse. Keep it that way; Pulse's k6/bench scripts depend on it |
 

@@ -11,6 +11,7 @@ import (
 var (
 	ErrNotFound      = errors.New("store: not found")
 	ErrUsernameTaken = errors.New("store: username taken")
+	ErrCodeTaken     = errors.New("store: room code taken")
 )
 
 type User struct {
@@ -41,4 +42,34 @@ type Sessions interface {
 	TouchSession(ctx context.Context, id string, lastSeen, expires time.Time) error
 	DeleteSession(ctx context.Context, id string) error
 	DeleteExpiredSessions(ctx context.Context, now time.Time) (int64, error)
+}
+
+type Room struct {
+	ID           int64
+	Code         string
+	OwnerID      int64
+	CreatedAt    time.Time
+	LastActiveAt time.Time
+}
+
+type ChatMessage struct {
+	ID        int64
+	RoomID    int64
+	UserID    int64
+	Username  string
+	Text      string
+	CreatedAt time.Time
+}
+
+type Rooms interface {
+	// CreateRoom returns ErrCodeTaken if code is already used.
+	CreateRoom(ctx context.Context, code string, ownerID int64) (Room, error)
+	RoomByCode(ctx context.Context, code string) (Room, error)
+	TouchRoom(ctx context.Context, id int64, at time.Time) error
+}
+
+type Chat interface {
+	AddChatMessage(ctx context.Context, m ChatMessage) (ChatMessage, error)
+	// RecentChatMessages returns up to limit messages, oldest first.
+	RecentChatMessages(ctx context.Context, roomID int64, limit int) ([]ChatMessage, error)
 }

@@ -9,10 +9,13 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"anda/internal/auth"
+	"anda/internal/gateway"
+	"anda/internal/rooms"
 	"anda/internal/store"
 )
 
@@ -46,8 +49,18 @@ func run(log *slog.Logger) error {
 	}, log)
 	go authSvc.RunJanitor(ctx)
 
+	roomMgr := rooms.NewManager(db, db, log)
+	// Extra WebSocket origins, e.g. "localhost:3000" for the Next dev server.
+	var origins []string
+	if v := os.Getenv("ANDA_WS_ORIGINS"); v != "" {
+		origins = strings.Split(v, ",")
+	}
+	gw := gateway.New(authSvc.UserFromRequest, roomMgr, origins, log)
+
 	mux := http.NewServeMux()
 	authSvc.Register(mux)
+	(&rooms.Handlers{Manager: roomMgr, Users: db, Authenticate: authSvc.UserFromRequest, Log: log}).Register(mux)
+	gw.Register(mux)
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		if err := db.Ping(r.Context()); err != nil {
 			http.Error(w, "db unavailable", http.StatusServiceUnavailable)
@@ -77,6 +90,7 @@ func run(log *slog.Logger) error {
 	case <-ctx.Done():
 	}
 	log.Info("shutting down")
+	gw.Shutdown()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutdownCtx)

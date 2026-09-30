@@ -136,3 +136,83 @@ func (s *SQLite) DeleteExpiredSessions(ctx context.Context, now time.Time) (int6
 	}
 	return res.RowsAffected()
 }
+
+func (s *SQLite) CreateRoom(ctx context.Context, code string, ownerID int64) (Room, error) {
+	now := time.Unix(time.Now().Unix(), 0)
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO rooms (code, owner_id, created_at, last_active_at) VALUES (?, ?, ?, ?)`,
+		code, ownerID, now.Unix(), now.Unix())
+	if err != nil {
+		var se *sqlite.Error
+		if errors.As(err, &se) && se.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE {
+			return Room{}, ErrCodeTaken
+		}
+		return Room{}, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return Room{}, err
+	}
+	return Room{ID: id, Code: code, OwnerID: ownerID, CreatedAt: now, LastActiveAt: now}, nil
+}
+
+func (s *SQLite) RoomByCode(ctx context.Context, code string) (Room, error) {
+	var r Room
+	var created, active int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, code, owner_id, created_at, last_active_at FROM rooms WHERE code = ?`, code).
+		Scan(&r.ID, &r.Code, &r.OwnerID, &created, &active)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Room{}, ErrNotFound
+		}
+		return Room{}, err
+	}
+	r.CreatedAt = time.Unix(created, 0)
+	r.LastActiveAt = time.Unix(active, 0)
+	return r, nil
+}
+
+func (s *SQLite) TouchRoom(ctx context.Context, id int64, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE rooms SET last_active_at = ? WHERE id = ?`, at.Unix(), id)
+	return err
+}
+
+func (s *SQLite) AddChatMessage(ctx context.Context, m ChatMessage) (ChatMessage, error) {
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO chat_messages (room_id, user_id, text, created_at) VALUES (?, ?, ?, ?)`,
+		m.RoomID, m.UserID, m.Text, m.CreatedAt.UnixMilli())
+	if err != nil {
+		return ChatMessage{}, err
+	}
+	m.ID, err = res.LastInsertId()
+	return m, err
+}
+
+func (s *SQLite) RecentChatMessages(ctx context.Context, roomID int64, limit int) ([]ChatMessage, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT m.id, m.room_id, m.user_id, u.username, m.text, m.created_at
+		FROM chat_messages m JOIN users u ON u.id = m.user_id
+		WHERE m.room_id = ? ORDER BY m.id DESC LIMIT ?`, roomID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ChatMessage
+	for rows.Next() {
+		var m ChatMessage
+		var created int64
+		if err := rows.Scan(&m.ID, &m.RoomID, &m.UserID, &m.Username, &m.Text, &created); err != nil {
+			return nil, err
+		}
+		m.CreatedAt = time.UnixMilli(created)
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out, nil
+}

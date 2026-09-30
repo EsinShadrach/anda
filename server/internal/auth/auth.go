@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"math"
@@ -20,6 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"anda/internal/httpx"
 	"anda/internal/store"
 )
 
@@ -135,15 +135,15 @@ func (s *Service) handleSignup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var c credentials
-	if !decode(w, r, &c) {
+	if !httpx.Decode(w, r, &c) {
 		return
 	}
 	if !usernameRE.MatchString(c.Username) {
-		writeError(w, http.StatusBadRequest, "invalid_username", "Usernames are 3 to 20 letters, numbers or underscores.")
+		httpx.Error(w, http.StatusBadRequest, "invalid_username", "Usernames are 3 to 20 letters, numbers or underscores.")
 		return
 	}
 	if n := utf8.RuneCountInString(c.Password); n < minPassword || len(c.Password) > maxPassword {
-		writeError(w, http.StatusBadRequest, "invalid_password", "Passwords need at least 8 characters.")
+		httpx.Error(w, http.StatusBadRequest, "invalid_password", "Passwords need at least 8 characters.")
 		return
 	}
 	hash, err := hashPassword(c.Password)
@@ -153,7 +153,7 @@ func (s *Service) handleSignup(w http.ResponseWriter, r *http.Request) {
 	}
 	u, err := s.users.CreateUser(r.Context(), c.Username, hash)
 	if errors.Is(err, store.ErrUsernameTaken) {
-		writeError(w, http.StatusConflict, "username_taken", "That username is taken.")
+		httpx.Error(w, http.StatusConflict, "username_taken", "That username is taken.")
 		return
 	}
 	if err != nil {
@@ -165,12 +165,12 @@ func (s *Service) handleSignup(w http.ResponseWriter, r *http.Request) {
 		s.internal(w, "create session", err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"user": userJSON{u.ID, u.Username}})
+	httpx.JSON(w, http.StatusCreated, map[string]any{"user": userJSON{u.ID, u.Username}})
 }
 
 func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var c credentials
-	if !decode(w, r, &c) {
+	if !httpx.Decode(w, r, &c) {
 		return
 	}
 	ip := s.clientIP(r)
@@ -205,7 +205,7 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		s.loginPerIP.add(ip, now)
 		s.loginPerAccount.add(account, now)
-		writeError(w, http.StatusUnauthorized, "bad_credentials", "Wrong username or password.")
+		httpx.Error(w, http.StatusUnauthorized, "bad_credentials", "Wrong username or password.")
 		return
 	}
 	s.loginPerAccount.reset(account)
@@ -213,7 +213,7 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 		s.internal(w, "create session", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"user": userJSON{u.ID, u.Username}})
+	httpx.JSON(w, http.StatusOK, map[string]any{"user": userJSON{u.ID, u.Username}})
 }
 
 func (s *Service) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -230,14 +230,14 @@ func (s *Service) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (s *Service) handleMe(w http.ResponseWriter, r *http.Request) {
 	u, err := s.UserFromRequest(r)
 	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusUnauthorized, "not_signed_in", "Not signed in.")
+		httpx.Error(w, http.StatusUnauthorized, "not_signed_in", "Not signed in.")
 		return
 	}
 	if err != nil {
 		s.internal(w, "load session", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"user": userJSON{u.ID, u.Username}})
+	httpx.JSON(w, http.StatusOK, map[string]any{"user": userJSON{u.ID, u.Username}})
 }
 
 func (s *Service) startSession(w http.ResponseWriter, r *http.Request, userID int64) error {
@@ -297,7 +297,7 @@ func (s *Service) clientIP(r *http.Request) string {
 
 func (s *Service) internal(w http.ResponseWriter, what string, err error) {
 	s.log.Error(what, "err", err)
-	writeError(w, http.StatusInternalServerError, "internal", "Something went wrong.")
+	httpx.Error(w, http.StatusInternalServerError, "internal", "Something went wrong.")
 }
 
 func hashToken(token string) string {
@@ -305,33 +305,7 @@ func hashToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// decode reads a small JSON body. Requiring application/json also means a cross-site
-// HTML form can't post here, on top of the SameSite=Lax cookie.
-func decode(w http.ResponseWriter, r *http.Request, v any) bool {
-	if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
-		writeError(w, http.StatusUnsupportedMediaType, "bad_content_type", "Expected application/json.")
-		return false
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
-	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", "Invalid JSON body.")
-		return false
-	}
-	return true
-}
-
 func tooMany(w http.ResponseWriter, wait time.Duration, msg string) {
 	w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(wait.Seconds()))))
-	writeError(w, http.StatusTooManyRequests, "rate_limited", msg)
-}
-
-func writeError(w http.ResponseWriter, status int, code, msg string) {
-	writeJSON(w, status, map[string]any{"error": map[string]string{"code": code, "message": msg}})
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	httpx.Error(w, http.StatusTooManyRequests, "rate_limited", msg)
 }

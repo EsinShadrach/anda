@@ -34,3 +34,23 @@ export const api = {
     request<{ user: User }>("POST", "/api/auth/login", { username, password }).then((r) => r.user),
   logout: () => request<void>("POST", "/api/auth/logout"),
 };
+
+export type RoomInfo = { code: string; owner?: string; online: number };
+
+export const rooms = {
+  create: () => request<{ room: RoomInfo }>("POST", "/api/rooms").then((r) => r.room),
+  get: (code: string) =>
+    request<{ room: RoomInfo }>("GET", `/api/rooms/${encodeURIComponent(code)}`).then((r) => r.room),
+};
+
+const CODE_ALPHABET = "BCDFGHJKMNPQRSTVWXZ23456789";
+
+/** Uppercases a typed code and drops anything that can't be in one. */
+export function cleanCode(input: string): string {
+  return input
+    .toUpperCase()
+    .split("")
+    .filter((c) => CODE_ALPHABET.includes(c))
+    .join("")
+    .slice(0, 6);
+}
