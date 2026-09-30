@@ -1,7 +1,12 @@
-// Keeps a <video> on the room's clock. The server is the source of truth; this follows it:
-//   - drift under 0.5s: nudge playbackRate between 0.95x and 1.05x
-//   - behind by up to 4s (a short stall): catch up at 1.1x instead of jumping
-//   - anything larger: hard seek
+// Keeps a <video> on the room's clock. The server is the source of truth; this follows it,
+// gently, because every playbackRate change makes the browser restart its pitch-corrected
+// audio (a stream of small changes is heard as choppy sound):
+//   - the drift is smoothed (median of the last few ticks), so clock and network jitter
+//     aren't mistaken for drift
+//   - within 0.2s: leave it alone, at exactly 1x
+//   - past that: correct at a fixed 1.04x / 0.96x (1.1x if over a second behind) until
+//     within 0.03s, then back to 1x: two rate changes per correction, not a wobble
+//   - ahead by over 1.5s or behind by over 4s: hard seek
 // Echo loops: a player event counts as a user action only if it disagrees with the room
 // (so our own play()/pause()/seeks, which always agree, are ignored). That also catches
 // keyboard shortcuts, media keys and the iOS native fullscreen player.
@@ -19,6 +24,11 @@ export type PlayerState = {
 };
 
 const TICK_MS = 250;
+const DRIFT_SAMPLES = 5; // median over ~1.25s
+const START_CORRECTING = 0.2; // seconds off before we touch the rate
+const STOP_CORRECTING = 0.03;
+const SEEK_AHEAD = 1.5; // slowing down from further ahead would take too long
+const SEEK_BEHIND = 4;
 const REPORT_MS = 2000;
 const SEEK_TOLERANCE = 1; // a player seek within this of the room is ours, not the user's
 
@@ -29,6 +39,8 @@ export class PlayerSync {
   private lastReport = 0;
   private lastStalling = false;
   private waitingSince = 0;
+  private drifts: number[] = [];
+  private correcting = false;
   private unlocked = false;
   private unlocking = false; // our own play() from the unlock tap is not a user action
 
@@ -196,23 +208,26 @@ export class PlayerSync {
         this.selfPlayAt = Date.now();
         v.play().catch(this.onBlocked);
       }
-      const drift = v.currentTime - target;
-      if (Math.abs(drift) > 4 || drift > 0.5) {
+      this.drifts.push(v.currentTime - target);
+      if (this.drifts.length > DRIFT_SAMPLES) this.drifts.shift();
+      const drift = median(this.drifts);
+      if (drift < -SEEK_BEHIND || drift > SEEK_AHEAD) {
         this.seekTo(v, target);
-        v.playbackRate = 1;
-      } else if (drift < -0.5) {
-        v.playbackRate = 1.1; // catching up after a short stall
-      } else if (Math.abs(drift) > 0.04) {
-        v.playbackRate = clamp(1 - drift * 0.5, 0.95, 1.05);
+        this.setRate(v, 1);
+        this.correcting = false;
       } else {
-        v.playbackRate = 1;
+        if (!this.correcting && Math.abs(drift) > START_CORRECTING) this.correcting = true;
+        else if (this.correcting && Math.abs(drift) < STOP_CORRECTING) this.correcting = false;
+        this.setRate(v, !this.correcting ? 1 : drift > 0 ? 0.96 : drift < -1 ? 1.1 : 1.04);
       }
     } else {
+      this.drifts = []; // a fresh measurement when it runs again
+      this.correcting = false;
       if (!v.paused) {
         this.selfPauseAt = Date.now();
         v.pause();
       }
-      v.playbackRate = 1;
+      this.setRate(v, 1);
       if (Math.abs(v.currentTime - target) > 0.1 && !v.seeking) this.seekTo(v, target); // paused: show the same frame
     }
 
@@ -223,7 +238,13 @@ export class PlayerSync {
 
   private seekTo(v: HTMLVideoElement, target: number) {
     this.selfSeek = { target, at: Date.now() };
+    this.drifts = []; // the old samples describe where we were, not where we are
     v.currentTime = target;
+  }
+
+  // Only touch playbackRate when it actually changes.
+  private setRate(v: HTMLVideoElement, rate: number) {
+    if (v.playbackRate !== rate) v.playbackRate = rate;
   }
 
   /** What the room (or our pending intent) says the video should be doing. */
@@ -327,6 +348,8 @@ export class PlayerSync {
   }
 }
 
-function clamp(n: number, lo: number, hi: number) {
-  return Math.min(hi, Math.max(lo, n));
+function median(xs: number[]): number {
+  const s = [...xs].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
