@@ -1,11 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowRightIcon, PlusIcon, WarningCircleIcon } from "@phosphor-icons/react";
-import { ApiError, rooms, type User } from "@/lib/api";
+import { ArrowRightIcon, CouchIcon, WarningCircleIcon } from "@phosphor-icons/react";
+import { ApiError, rooms, type User, type VisitedRoom } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { CodeInput } from "@/components/ui/code-input";
 import { Spinner } from "@/components/ui/spinner";
+import { Poster, Presence, roomTitle } from "@/components/profile/room-bits";
 
 function greeting() {
   const h = new Date().getHours();
@@ -14,6 +15,8 @@ function greeting() {
   if (h < 17) return "Afternoon";
   return "Evening";
 }
+
+const RECENT = 3;
 
 export function Lobby({ user }: { user: User }) {
   const router = useRouter();
@@ -54,62 +57,103 @@ export function Lobby({ user }: { user: User }) {
   }
 
   return (
-    <div className="flex flex-col gap-10">
-      <div className="enter flex flex-col gap-4">
-        <h1 className="text-[40px] leading-[1.02] font-semibold tracking-[-0.035em] text-fog-50 sm:text-5xl">
-          {greeting()},
-          <span className="block text-ember-400">{user.username}.</span>
-        </h1>
-        <p className="max-w-[40ch] text-[17px] leading-relaxed text-fog-300">
-          Start a room and send the code. Everyone watches the same moment, with the chat alongside.
-        </p>
-      </div>
+    <div className="grid flex-1 content-center items-center gap-12 py-8 lg:grid-cols-[minmax(0,1fr)_440px] lg:gap-20 lg:py-12">
+      <section className="flex flex-col gap-8 sm:gap-10">
+        <div className="enter flex flex-col gap-5">
+          <h1 className="text-[44px] leading-[1.02] font-semibold tracking-[-0.04em] text-fog-50 sm:text-[68px]">
+            {greeting()}, <span className="text-plum-200 max-sm:block">{user.username}.</span>
+          </h1>
+          <p className="max-w-[34ch] text-[18px] leading-relaxed text-fog-300 max-sm:hidden sm:text-[20px]">
+            Start a room, send the code, and everyone watches the same film at the same moment.
+          </p>
+        </div>
 
-      <div className="flex flex-col gap-3">
-        <Button size="lg" onClick={create} loading={creating} className="w-full max-w-[360px]">
-          <PlusIcon size={20} weight="bold" />
+        <Button size="xl" onClick={create} loading={creating} className="w-fit max-sm:w-full">
+          <CouchIcon size={22} weight="bold" />
           Start a room
         </Button>
+
+        <div className="flex flex-col gap-3">
+          <p className="text-[14px] text-fog-500">Got a code?</p>
+          <CodeInput
+            value={code}
+            onChange={(c) => {
+              setCode(c);
+              if (error) setError("");
+            }}
+            onComplete={join}
+            invalid={!!error}
+            disabled={checking}
+            shakeKey={shake}
+          />
+          <div className="min-h-5 text-[14px]" aria-live="polite">
+            {checking ? (
+              <span className="inline-flex items-center gap-2 text-fog-500">
+                <Spinner size={14} /> Finding room {code}
+              </span>
+            ) : error ? (
+              <span className="inline-flex items-start gap-2 text-danger">
+                <WarningCircleIcon size={17} weight="fill" className="mt-px shrink-0" />
+                {error}
+              </span>
+            ) : null}
+          </div>
+        </div>
+      </section>
+
+      <RecentRooms me={user.username} />
+    </div>
+  );
+}
+
+// The last few rooms, to walk straight back into.
+function RecentRooms({ me }: { me: string }) {
+  const [list, setList] = useState<VisitedRoom[] | null>(null);
+
+  useEffect(() => {
+    const load = () => rooms.visited().then(setList, () => setList((l) => l ?? []));
+    load();
+    const onVisible = () => document.visibilityState === "visible" && load();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, []);
+
+  if (list && list.length === 0) return null;
+  return (
+    <section className="flex flex-col gap-3" aria-labelledby="recent-title">
+      <h2 id="recent-title" className="px-2 text-[16px] font-semibold text-fog-300">
+        Pick up where you left off
+      </h2>
+      <ul className="flex flex-col gap-3">
+        {list === null
+          ? [0, 1].map((i) => <li key={i} className="skeleton h-[140px] rounded-[32px]" aria-hidden />)
+          : list.slice(0, RECENT).map((r) => <RoomCard key={r.code} room={r} me={me} />)}
+      </ul>
+      {list && list.length > 0 && (
         <Link
           href="/me"
-          className="inline-flex w-fit items-center gap-1.5 text-[14px] font-medium text-fog-500 transition-colors hover:text-fog-100"
+          className="mt-1 inline-flex w-fit items-center gap-1.5 px-2 text-[14px] font-medium text-plum-200 transition-opacity hover:opacity-80"
         >
-          Or go back to one of your rooms
-          <ArrowRightIcon size={14} weight="bold" />
+          All your rooms <ArrowRightIcon size={14} />
         </Link>
-      </div>
+      )}
+    </section>
+  );
+}
 
-      <div className="flex flex-col gap-3">
-        <div className="flex max-w-[360px] items-center gap-3 text-[13px] font-medium text-fog-500">
-          Have a code?
-          <span className="h-px flex-1 bg-ink-700" />
-        </div>
-        <CodeInput
-          value={code}
-          onChange={(c) => {
-            setCode(c);
-            if (error) setError("");
-          }}
-          onComplete={join}
-          invalid={!!error}
-          disabled={checking}
-          shakeKey={shake}
-        />
-        <div className="min-h-5 text-[14px]" aria-live="polite">
-          {checking ? (
-            <span className="inline-flex items-center gap-2 text-fog-500">
-              <Spinner size={14} /> Finding room {code}
-            </span>
-          ) : error ? (
-            <span className="inline-flex items-start gap-2 text-danger">
-              <WarningCircleIcon size={17} weight="fill" className="mt-px shrink-0" />
-              {error}
-            </span>
-          ) : (
-            <span className="text-fog-600">Six characters. Pasting a whole invite code works too.</span>
-          )}
-        </div>
+function RoomCard({ room, me }: { room: VisitedRoom; me: string }) {
+  const router = useRouter();
+  const live = room.online > (room.here?.includes(me) ? 1 : 0);
+  return (
+    <li className="enter flex items-center gap-4 rounded-[32px] bg-ink-800 p-4">
+      <Poster room={room} className="h-[108px] w-[72px] shrink-0 rounded-[16px] max-sm:h-24 max-sm:w-16" />
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
+        <p className="truncate text-[18px] font-semibold tracking-[-0.01em] text-fog-50">{roomTitle(room)}</p>
+        <Presence room={room} me={me} />
       </div>
-    </div>
+      <Button variant={live ? "primary" : "secondary"} onClick={() => router.push(`/room?code=${room.code}`)} className="h-12 px-5">
+        Rejoin
+      </Button>
+    </li>
   );
 }

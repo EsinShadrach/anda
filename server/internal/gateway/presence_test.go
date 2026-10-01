@@ -203,3 +203,43 @@ func TestReactions(t *testing.T) {
 		t.Fatalf("flood let %d through", fires)
 	}
 }
+
+func TestTyping(t *testing.T) {
+	host, guest, _, _ := twoInRoomWith(t, 7, nil)
+
+	// Stopping before ever starting is nothing to tell anyone.
+	host.send(protocol.TypeTypingSend, protocol.TypingSend{Active: false})
+	host.send(protocol.TypeTypingSend, protocol.TypingSend{Active: true})
+	var got protocol.Typing
+	guest.expect(protocol.TypeTyping, &got)
+	if !got.Active || got.By.Username != "rafe" {
+		t.Fatalf("typing: %+v", got)
+	}
+
+	// Repeats inside typingEvery are dropped; stopping always gets through.
+	for range 5 {
+		host.send(protocol.TypeTypingSend, protocol.TypingSend{Active: true})
+	}
+	host.send(protocol.TypeTypingSend, protocol.TypingSend{Active: false})
+	host.send(protocol.TypeChatSend, protocol.ChatSend{Text: "end"})
+	var seen []bool
+	for {
+		var env protocol.Envelope
+		_, data, err := guest.ws.Read(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		json.Unmarshal(data, &env)
+		if env.Type == protocol.TypeTyping {
+			var ty protocol.Typing
+			json.Unmarshal(env.Payload, &ty)
+			seen = append(seen, ty.Active)
+		}
+		if env.Type == protocol.TypeChatMessage {
+			break
+		}
+	}
+	if len(seen) != 1 || seen[0] {
+		t.Fatalf("want only the stop relayed, got %v", seen)
+	}
+}

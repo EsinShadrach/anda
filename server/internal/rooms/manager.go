@@ -131,9 +131,13 @@ func (m *Manager) Join(ctx context.Context, code string, u protocol.User, s Send
 // Visit is a room on someone's profile, with what's happening in it right now.
 type Visit struct {
 	store.VisitedRoom
-	Online int    // members connected now
-	Film   string // title of the film on screen, "" if none or the room isn't live
+	Online int      // members connected now
+	Here   []string // their names, in join order (at most visitNames)
+	Film   string   // the film on screen, or the one it left off on; "" if none
+	Poster string
 }
+
+const visitNames = 4
 
 // Visited lists the rooms userID has been in, most recently joined first.
 func (m *Manager) Visited(ctx context.Context, userID int64) ([]Visit, error) {
@@ -143,16 +147,33 @@ func (m *Manager) Visited(ctx context.Context, userID int64) ([]Visit, error) {
 	}
 	out := make([]Visit, len(rooms))
 	for i, v := range rooms {
-		out[i] = Visit{VisitedRoom: v}
+		out[i] = Visit{VisitedRoom: v, Film: v.FilmTitle, Poster: v.FilmPoster}
 		if r := m.get(v.Code); r != nil {
 			sum := make(chan Visit, 1)
-			if r.do(func() { sum <- Visit{Online: r.onlineCount(), Film: r.filmTitle()} }) {
+			if r.do(func() { sum <- r.visit() }) {
 				live := <-sum
-				out[i].Online, out[i].Film = live.Online, live.Film
+				out[i].Online, out[i].Here = live.Online, live.Here
+				if live.Film != "" {
+					out[i].Film, out[i].Poster = live.Film, live.Poster
+				}
 			}
 		}
 	}
 	return out, nil
+}
+
+// Presence is who's in a room right now: nobody unless it's live.
+func (m *Manager) Presence(code string) (online int, here []string) {
+	r := m.get(code)
+	if r == nil {
+		return 0, nil
+	}
+	ch := make(chan Visit, 1)
+	if !r.do(func() { ch <- r.visit() }) {
+		return 0, nil
+	}
+	v := <-ch
+	return v.Online, v.Here
 }
 
 // End deletes a room for good, on its owner's say-so. Anyone inside is told and sent out.
@@ -205,6 +226,12 @@ func (m *Manager) Leave(code string, userID int64) {
 func (m *Manager) React(code string, userID int64, s Sender, msg protocol.ReactionSend) {
 	if r := m.get(code); r != nil {
 		r.do(func() { r.react(userID, s, msg) })
+	}
+}
+
+func (m *Manager) Typing(code string, userID int64, s Sender, msg protocol.TypingSend) {
+	if r := m.get(code); r != nil {
+		r.do(func() { r.typing(userID, s, msg) })
 	}
 }
 

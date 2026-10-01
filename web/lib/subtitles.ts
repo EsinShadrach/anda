@@ -1,6 +1,12 @@
 // Subtitles on the room's <video>: WebVTT loaded into one text track we own, so a file can
 // be swapped, re-timed (the +/- nudge for releases that don't line up), and reloaded while
-// a film is still downloading (its subtitles grow with it). Styling is ::cue in globals.css.
+// a film is still downloading (its subtitles grow with it).
+//
+// The track only keeps time ("hidden": the browser tracks which cues are active but draws
+// nothing); the player draws the text itself, above its controls, sliding up and down with
+// them. Native cue rendering put subtitles behind the control bar, and re-laying out a cue
+// that's on screen made Safari drop it until the next one. The exception is the iPhone's own
+// full-screen player, where ours can't draw: the track is "showing" there.
 
 type Cue = { start: number; end: number; text: string };
 
@@ -36,28 +42,42 @@ export class SubtitleTrack {
   private offset = 0;
   private timer: ReturnType<typeof setInterval> | undefined;
   private seq = 0;
-  private line = 90; // % down the video element where the cue's bottom sits
+  private on = false; // a file is chosen
+  private native = false; // the iPhone's own full-screen player is up
+  private listeners = new Set<(cues: VTTCue[]) => void>();
 
-  constructor(video: HTMLVideoElement) {
+  constructor(private video: HTMLVideoElement) {
     // Reuse ours if this <video> already has it (the element outlives film changes).
     const existing = Array.from(video.textTracks).find((t) => t.label === "anda");
     this.track = existing ?? video.addTextTrack("subtitles", "anda");
     this.track.mode = "hidden";
+    this.track.addEventListener("cuechange", this.emit);
+    video.addEventListener("seeked", this.emit);
+    video.addEventListener("webkitbeginfullscreen", this.nativeOn);
+    video.addEventListener("webkitendfullscreen", this.nativeOff);
+  }
+
+  /** The cues on screen now, whenever that changes. Returns an unsubscribe. */
+  onCues(fn: (cues: VTTCue[]) => void) {
+    this.listeners.add(fn);
+    fn(this.active());
+    return () => {
+      this.listeners.delete(fn);
+    };
   }
 
   /** Show url (null = off). growing: re-fetch now and then, the film is still arriving. */
   async show(url: string | null, growing: boolean) {
     clearInterval(this.timer);
     this.url = url;
+    this.on = !!url;
     const seq = ++this.seq;
     if (!url) {
       this.cues = [];
       this.render();
-      this.track.mode = "hidden";
       return;
     }
     await this.load(url, seq);
-    this.track.mode = "showing";
     if (growing) this.timer = setInterval(() => this.url && this.load(this.url, this.seq), 30_000);
   }
 
@@ -66,20 +86,39 @@ export class SubtitleTrack {
     this.render();
   }
 
-  /** Where cues sit, as % from the top: raised above the player's controls while they show. */
-  setLine(percent: number) {
-    if (Math.abs(percent - this.line) < 0.5) return;
-    this.line = percent;
-    this.render(); // browsers don't re-lay-out a showing cue whose line changes; rebuild them
-  }
-
   dispose() {
     clearInterval(this.timer);
     this.seq++;
     this.cues = [];
+    this.on = false;
     this.render();
-    this.track.mode = "hidden";
+    this.track.removeEventListener("cuechange", this.emit);
+    this.video.removeEventListener("seeked", this.emit);
+    this.video.removeEventListener("webkitbeginfullscreen", this.nativeOn);
+    this.video.removeEventListener("webkitendfullscreen", this.nativeOff);
+    this.listeners.clear();
   }
+
+  private nativeOn = () => {
+    this.native = true;
+    this.track.mode = "showing";
+  };
+
+  private nativeOff = () => {
+    this.native = false;
+    this.track.mode = "hidden";
+    this.emit();
+  };
+
+  private active(): VTTCue[] {
+    if (!this.on) return [];
+    return Array.from(this.track.activeCues ?? []).filter((c): c is VTTCue => c instanceof VTTCue);
+  }
+
+  private emit = () => {
+    const cues = this.native ? [] : this.active();
+    this.listeners.forEach((fn) => fn(cues));
+  };
 
   private async load(url: string, seq: number) {
     try {
@@ -100,11 +139,9 @@ export class SubtitleTrack {
     for (const c of this.cues) {
       const start = c.start + this.offset;
       if (c.end + this.offset <= 0) continue;
-      const cue = new VTTCue(Math.max(0, start), c.end + this.offset, c.text);
-      cue.snapToLines = false;
-      cue.line = this.line;
-      cue.lineAlign = "end";
-      t.addCue(cue);
+      t.addCue(new VTTCue(Math.max(0, start), c.end + this.offset, c.text));
     }
+    // Swapping cues under a playing film doesn't always fire cuechange: say what's on now.
+    setTimeout(this.emit, 0);
   }
 }

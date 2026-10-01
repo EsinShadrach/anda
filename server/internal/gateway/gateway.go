@@ -270,6 +270,15 @@ func (g *Gateway) readLoop(ctx context.Context, c *conn, sess *session) {
 				g.rooms.React(code, c.user.ID, c, p)
 			}
 
+		case protocol.TypeTypingSend:
+			var p protocol.TypingSend
+			if !decode(c, env, &p) {
+				continue
+			}
+			if code := g.roomOf(sess); code != "" {
+				g.rooms.Typing(code, c.user.ID, c, p)
+			}
+
 		case protocol.TypeTimePing:
 			var p protocol.TimePing
 			if decode(c, env, &p) {

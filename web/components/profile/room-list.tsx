@@ -1,38 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowRightIcon, ArrowUUpLeftIcon, FilmSlateIcon, PlusIcon, WarningCircleIcon } from "@phosphor-icons/react";
+import { CouchIcon, WarningCircleIcon, XIcon } from "@phosphor-icons/react";
 import { ApiError, rooms, type VisitedRoom } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Marquee, Presence, roomTitle } from "./room-bits";
 
 // How long "Removed · Undo" stays before the removal is actually sent.
 const UNDO_MS = 5000;
 
-const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
-
-function ago(ms: number): string {
-  const s = (ms - Date.now()) / 1000;
-  const steps: [Intl.RelativeTimeFormatUnit, number][] = [
-    ["year", 31536000],
-    ["month", 2592000],
-    ["week", 604800],
-    ["day", 86400],
-    ["hour", 3600],
-    ["minute", 60],
-  ];
-  for (const [unit, size] of steps) if (Math.abs(s) >= size) return rtf.format(Math.round(s / size), unit);
-  return "just now";
-}
-
-export function RoomList({ onCount }: { onCount?: (n: number) => void }) {
+export function RoomList({ me, onCount }: { me?: string; onCount?: (n: number) => void }) {
   const [list, setList] = useState<VisitedRoom[] | null>(null);
   const [failed, setFailed] = useState(false);
   const [ending, setEnding] = useState<VisitedRoom | null>(null);
   const [endBusy, setEndBusy] = useState(false);
   const [endError, setEndError] = useState("");
-  // Rooms showing "Removed · Undo", with the timer that will really remove them.
-  const [removing, setRemoving] = useState<Record<string, true>>({});
+  // Rooms taken off the list but still inside their undo window, newest last.
+  const [removing, setRemoving] = useState<string[]>([]);
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 
   const load = useCallback(() => {
@@ -65,11 +50,11 @@ export function RoomList({ onCount }: { onCount?: (n: number) => void }) {
   }, []);
 
   useEffect(() => {
-    if (list) onCount?.(list.length - Object.keys(removing).length);
+    if (list) onCount?.(list.length - removing.length);
   }, [list, removing, onCount]);
 
   function remove(code: string) {
-    setRemoving((m) => ({ ...m, [code]: true }));
+    setRemoving((r) => [...r.filter((c) => c !== code), code]);
     timers.current.set(
       code,
       setTimeout(async () => {
@@ -80,7 +65,7 @@ export function RoomList({ onCount }: { onCount?: (n: number) => void }) {
         } catch {
           // Didn't go through: put it back rather than pretend.
         }
-        setRemoving(({ [code]: _, ...rest }) => rest);
+        setRemoving((r) => r.filter((c) => c !== code));
       }, UNDO_MS),
     );
   }
@@ -88,7 +73,7 @@ export function RoomList({ onCount }: { onCount?: (n: number) => void }) {
   function undo(code: string) {
     clearTimeout(timers.current.get(code));
     timers.current.delete(code);
-    setRemoving(({ [code]: _, ...rest }) => rest);
+    setRemoving((r) => r.filter((c) => c !== code));
   }
 
   async function confirmEnd() {
@@ -118,44 +103,74 @@ export function RoomList({ onCount }: { onCount?: (n: number) => void }) {
           <WarningCircleIcon size={18} weight="fill" className="mt-px shrink-0" />
           Couldn&rsquo;t load your rooms.
         </p>
-        <Button variant="glass" onClick={load}>
+        <Button variant="secondary" onClick={load}>
           Try again
         </Button>
       </div>
     );
   }
 
-  if (!list) return <ListSkeleton />;
+  if (!list) return <GridSkeleton />;
 
-  if (list.length === 0) return <Empty />;
+  const shown = list.filter((r) => !removing.includes(r.code));
+  const lastRemoved = removing[removing.length - 1];
 
   return (
     <>
-      <ul className="flex flex-col divide-y divide-ink-700/70 border-y border-ink-700/70">
-        <AnimatePresence initial={false} mode="popLayout">
-          {list.map((r) => (
-            <motion.li
-              key={r.code}
-              layout
-              exit={{ opacity: 0, scale: 0.98, transition: { duration: 0.18 } }}
-              transition={{ type: "spring", bounce: 0, duration: 0.35 }}
-            >
-              {removing[r.code] ? (
-                <Removed code={r.code} onUndo={() => undo(r.code)} />
-              ) : (
-                <Row
+      {shown.length === 0 && removing.length === 0 ? (
+        <Empty />
+      ) : (
+        <ul className="grid grid-cols-[repeat(auto-fill,minmax(290px,1fr))] gap-4 lg:grid-cols-[repeat(auto-fill,minmax(300px,350px))]">
+          <AnimatePresence initial={false} mode="popLayout">
+            {shown.map((r) => (
+              <motion.li
+                key={r.code}
+                layout
+                initial={{ opacity: 0, scale: 0.97 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.96, filter: "blur(4px)", transition: { duration: 0.18 } }}
+                transition={{ type: "spring", bounce: 0, duration: 0.35 }}
+              >
+                <Card
                   room={r}
+                  me={me}
                   onEnd={() => {
                     setEndError("");
                     setEnding(r);
                   }}
                   onRemove={() => remove(r.code)}
                 />
-              )}
-            </motion.li>
-          ))}
+              </motion.li>
+            ))}
+          </AnimatePresence>
+        </ul>
+      )}
+
+      <div className="pointer-events-none fixed inset-x-0 bottom-[max(24px,env(safe-area-inset-bottom))] z-40 flex justify-center px-4" aria-live="polite">
+        <AnimatePresence>
+          {lastRemoved && (
+            <motion.div
+              key="undo"
+              initial={{ opacity: 0, y: 16, filter: "blur(6px)" }}
+              animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+              exit={{ opacity: 0, y: 12, transition: { duration: 0.15 } }}
+              transition={{ type: "spring", bounce: 0, duration: 0.35 }}
+              className="pointer-events-auto flex h-14 items-center gap-2 rounded-full bg-ink-700 pr-2 pl-5 shadow-[0_16px_48px_rgb(0_0_0/0.45)]"
+            >
+              <span className="text-[15px] text-fog-300">
+                Removed{removing.length > 1 ? ` ${removing.length} rooms` : ""}
+              </span>
+              <button
+                onClick={() => removing.forEach(undo)}
+                className="press h-10 rounded-full px-4 text-[15px] font-semibold text-plum-200 hover:bg-white/8"
+              >
+                Undo
+              </button>
+            </motion.div>
+          )}
         </AnimatePresence>
-      </ul>
+      </div>
+
       <ConfirmDialog
         open={!!ending}
         title={`End room ${ending?.code ?? ""}?`}
@@ -179,65 +194,39 @@ export function RoomList({ onCount }: { onCount?: (n: number) => void }) {
   );
 }
 
-function Row({ room, onEnd, onRemove }: { room: VisitedRoom; onEnd: () => void; onRemove: () => void }) {
+function Card({ room, me, onEnd, onRemove }: { room: VisitedRoom; me?: string; onEnd: () => void; onRemove: () => void }) {
   const router = useRouter();
-  const live = room.online > 0;
+  const live = room.online > (me && room.here?.includes(me) ? 1 : 0);
   return (
-    <div className="flex flex-col gap-4 py-5 sm:flex-row sm:items-center sm:gap-6">
-      <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-        <div className="flex items-baseline gap-3">
-          <span className="font-mono text-[20px] font-medium tracking-[0.14em] text-fog-50">{room.code}</span>
-          <span className="truncate text-[13px] text-fog-500">{room.mine ? "Yours" : `${room.owner}’s room`}</span>
+    <div className="flex h-full flex-col gap-3.5 rounded-[32px] bg-ink-800 p-3.5">
+      <Marquee room={room} className="h-[170px] rounded-[24px]" />
+      <div className="flex flex-col gap-1.5 px-1">
+        <div className="flex items-baseline justify-between gap-3">
+          <p className="truncate text-[18px] font-semibold tracking-[-0.01em] text-fog-50">{roomTitle(room)}</p>
+          <span className="shrink-0 font-mono text-[13px] tracking-[0.14em] text-plum-200">{room.code}</span>
         </div>
-        <p className="flex min-w-0 items-center gap-2 text-[14px] text-fog-300">
-          {live ? (
-            <>
-              <span className="relative flex size-2 shrink-0">
-                <span className="absolute inset-0 animate-ping rounded-full bg-live/60 motion-reduce:hidden" />
-                <span className="relative size-2 rounded-full bg-live" />
-              </span>
-              <span className="shrink-0">{room.online} here now</span>
-              {room.film && (
-                <span className="flex min-w-0 items-center gap-1.5 text-fog-500">
-                  <FilmSlateIcon size={15} className="shrink-0" />
-                  <span className="truncate">{room.film}</span>
-                </span>
-              )}
-            </>
-          ) : (
-            <span className="text-fog-500">Quiet &middot; you were last in {ago(room.last_joined_at)}</span>
-          )}
-        </p>
+        <Presence room={room} me={me} />
       </div>
-      <div className="flex shrink-0 items-center gap-1">
-        <Button variant="glass" onClick={() => router.push(`/room?code=${room.code}`)} className="max-sm:flex-1">
+      <div className="mt-auto flex gap-2">
+        <Button variant={live ? "primary" : "secondary"} onClick={() => router.push(`/room?code=${room.code}`)} className="h-12 flex-1">
           Rejoin
-          <ArrowRightIcon size={16} weight="bold" />
         </Button>
-        {room.mine ? (
-          <Button variant="ghost" onClick={onEnd} className="text-danger/90 hover:text-danger">
-            End
-          </Button>
-        ) : (
-          <Button variant="ghost" onClick={onRemove} title="Take it off your list. The room keeps going.">
-            Remove
+        {room.mine && (
+          <Button variant="danger" onClick={onEnd} className="h-12 px-5">
+            End room
           </Button>
         )}
+        <Button
+          variant="secondary"
+          size="icon"
+          onClick={onRemove}
+          aria-label={`Take ${room.code} off your list`}
+          title="Take it off your list. The room keeps going."
+          className="size-12 text-fog-300"
+        >
+          <XIcon size={18} />
+        </Button>
       </div>
-    </div>
-  );
-}
-
-function Removed({ code, onUndo }: { code: string; onUndo: () => void }) {
-  return (
-    <div className="enter flex items-center justify-between gap-4 py-3.5" aria-live="polite">
-      <span className="text-[14px] text-fog-500">
-        Removed <span className="font-mono tracking-[0.1em] text-fog-300">{code}</span> from your list
-      </span>
-      <Button variant="ghost" onClick={onUndo} className="h-9 px-3 text-[14px]">
-        <ArrowUUpLeftIcon size={16} weight="bold" />
-        Undo
-      </Button>
     </div>
   );
 }
@@ -245,28 +234,27 @@ function Removed({ code, onUndo }: { code: string; onUndo: () => void }) {
 function Empty() {
   const router = useRouter();
   return (
-    <div className="enter flex flex-col items-start gap-4 border-y border-ink-700/70 py-8">
-      <p className="max-w-[40ch] text-[16px] leading-relaxed text-fog-300">
+    <div className="enter flex max-w-[440px] flex-col items-start gap-5 rounded-[32px] bg-ink-800 p-7">
+      <span className="grid size-14 place-items-center rounded-full bg-ink-700 text-plum-200">
+        <CouchIcon size={26} weight="duotone" />
+      </span>
+      <p className="text-[16px] leading-relaxed text-fog-300">
         Rooms you start or join show up here, so you can find your way back without the code.
       </p>
-      <Button onClick={() => router.push("/")}>
-        <PlusIcon size={18} weight="bold" />
-        Start a room
-      </Button>
+      <Button onClick={() => router.push("/")}>Start a room</Button>
     </div>
   );
 }
 
-function ListSkeleton() {
+function GridSkeleton() {
   return (
-    <div className="flex flex-col divide-y divide-ink-700/70 border-y border-ink-700/70" aria-label="Loading your rooms" aria-busy>
+    <div className="grid grid-cols-[repeat(auto-fill,minmax(290px,1fr))] gap-4 lg:grid-cols-[repeat(auto-fill,minmax(300px,350px))]" aria-label="Loading your rooms" aria-busy>
       {[0, 1, 2].map((i) => (
-        <div key={i} className="flex items-center gap-6 py-5">
-          <div className="flex flex-1 flex-col gap-2.5">
-            <div className="skeleton h-6 w-32 rounded-lg" />
-            <div className="skeleton h-4 w-48 rounded-md" />
-          </div>
-          <div className="skeleton h-11 w-24 rounded-xl max-sm:hidden" />
+        <div key={i} className="flex flex-col gap-3.5 rounded-[32px] bg-ink-800 p-3.5">
+          <div className="skeleton h-[170px] rounded-[24px]" />
+          <div className="skeleton mx-1 h-5 w-2/3 rounded-full" />
+          <div className="skeleton mx-1 h-4 w-1/2 rounded-full" />
+          <div className="skeleton h-12 rounded-full" />
         </div>
       ))}
     </div>

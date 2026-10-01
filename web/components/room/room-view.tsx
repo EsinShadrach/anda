@@ -1,36 +1,44 @@
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
-import { FilmSlateIcon, FilmStripIcon } from "@phosphor-icons/react";
-import { motion, useMotionValue, useTransform } from "motion/react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { AnimatePresence, motion } from "motion/react";
+import { FilmReelIcon, FilmSlateIcon, XIcon } from "@phosphor-icons/react";
 import { RoomConnection, type RoomView as View } from "@/lib/room";
-import { Projector } from "@/components/projector";
 import { Spinner } from "@/components/ui/spinner";
-import { RoomHeader } from "./room-header";
-import { Chat } from "./chat";
-import { ChatSheet, type ChatMode } from "./chat-sheet";
-import { RoomDialogs } from "./room-dialogs";
-import { RoomGone } from "./room-gone";
-import { Player } from "./player";
-import { Library } from "./library";
 import { Button } from "@/components/ui/button";
 import { VoiceSession, type VoiceState } from "@/lib/voice";
-import { PhoneCameraButton, VoiceButtons, VoiceNotice, VoiceTiles } from "./voice";
+import { sounds } from "@/lib/sounds";
+import { PhoneHeader, RoomHeader } from "./room-header";
+import { Chat } from "./chat";
+import { RoomDialogs } from "./room-dialogs";
+import { RoomGone } from "./room-gone";
+import { Player, type PlayerLayout } from "./player";
+import { Library } from "./library";
+import { CamButton, MicButton, VoiceNotice } from "./voice";
+import { FilmTiles, PresencePill, SeatRow } from "./couch";
+import { ReactionRow, ReactionsPill } from "./player-extras";
+import { SoundToggle } from "./sound-toggle";
 
-function useIsPhone() {
+// Three rooms in one: "wide" (desktop and tablets: film, couch and chat side by side),
+// "phone" (portrait: film, couch, chat stacked) and "video" (a phone on its side: the film
+// full-bleed, everything else floating over it).
+const VIDEO_MQ = "(orientation: landscape) and (max-height: 500px)";
+const PHONE_MQ = "(max-width: 767px)";
+
+function useLayout(): PlayerLayout {
   return useSyncExternalStore(
     (cb) => {
-      const mq = matchMedia("(max-width: 767px)");
-      mq.addEventListener("change", cb);
-      return () => mq.removeEventListener("change", cb);
+      const mqs = [matchMedia(VIDEO_MQ), matchMedia(PHONE_MQ)];
+      mqs.forEach((mq) => mq.addEventListener("change", cb));
+      return () => mqs.forEach((mq) => mq.removeEventListener("change", cb));
     },
-    () => matchMedia("(max-width: 767px)").matches,
-    () => false,
+    () => (matchMedia(VIDEO_MQ).matches ? "video" : matchMedia(PHONE_MQ).matches ? "phone" : "wide"),
+    () => "wide",
   );
 }
 
 export function RoomView({ code }: { code: string }) {
   const [conn] = useState(() => new RoomConnection(code));
   const view = useSyncExternalStore(conn.subscribe, conn.getSnapshot, conn.getSnapshot);
-  const phone = useIsPhone();
+  const layout = useLayout();
   // "new": pick any film. "switch": another release of the film on screen, same timestamp.
   const [picking, setPicking] = useState<"new" | "switch" | null>(null);
   const [voice] = useState(() => new VoiceSession(code));
@@ -43,6 +51,9 @@ export function RoomView({ code }: { code: string }) {
     import("hls.js").catch(() => {});
     return () => conn.stop();
   }, [conn]);
+
+  // Joins, leaves, messages and typing get a soft sound (others' only; see lib/sounds.ts).
+  useEffect(() => conn.onEvent((e) => sounds.play(e.kind)), [conn]);
 
   // Voice connects (receive-only) once we're in the room; mic and camera stay off until asked.
   useEffect(() => {
@@ -82,12 +93,16 @@ export function RoomView({ code }: { code: string }) {
   if (view.notFound) return <RoomGone code={code} />;
 
   return (
-    <div className="fixed inset-0 overflow-hidden bg-ink-950">
-      {phone ? (
-        <PhoneLayout view={view} conn={conn} voice={voice} vs={vs} onPick={() => setPicking("new")} onSwitch={() => setPicking("switch")} />
-      ) : (
-        <WideLayout view={view} conn={conn} voice={voice} vs={vs} onPick={() => setPicking("new")} onSwitch={() => setPicking("switch")} />
-      )}
+    <div className="room-bg fixed inset-0 overflow-hidden">
+      <Room
+        view={view}
+        conn={conn}
+        voice={voice}
+        vs={vs}
+        layout={layout}
+        onPick={() => setPicking("new")}
+        onSwitch={view.media?.catalog_id ? () => setPicking("switch") : undefined}
+      />
       <VoiceNotice state={vs} />
       <Library
         open={picking !== null}
@@ -110,206 +125,236 @@ export function RoomView({ code }: { code: string }) {
   );
 }
 
-// Desktop / tablet / landscape: the stage fills the room; header and chat float over it.
-type LayoutProps = {
+// "short" is a phone on its side before a film is on: the wide room without the couch.
+type Mode = "wide" | "short" | "phone" | "video";
+
+const ROOT: Record<Mode, string> = {
+  wide: "grid size-full grid-cols-[minmax(0,1fr)_300px] grid-rows-[auto_minmax(0,1fr)_auto] gap-x-5 gap-y-4 p-5 xl:grid-cols-[minmax(0,1fr)_340px]",
+  short: "grid size-full grid-cols-[minmax(0,1fr)_300px] grid-rows-[auto_minmax(0,1fr)] gap-3 p-3 pl-[max(12px,env(safe-area-inset-left))]",
+  phone: "flex size-full flex-col pt-[max(10px,env(safe-area-inset-top))]",
+  video: "relative size-full bg-black",
+};
+
+const STAGE: Record<Mode, string> = {
+  wide: "relative col-start-1 row-start-2 min-h-0 overflow-hidden rounded-[28px] bg-ink-950 shadow-[0_30px_80px_rgb(112_41_99/0.18)]",
+  short: "relative col-start-1 row-start-2 min-h-0 overflow-hidden rounded-[22px] bg-ink-950",
+  phone: "relative mx-3 mt-3 aspect-video shrink-0 overflow-hidden rounded-[22px] bg-ink-950 shadow-[0_20px_60px_rgb(112_41_99/0.16)]",
+  video: "absolute inset-0 bg-black",
+};
+
+/**
+ * One room, three arrangements: wide (film, couch and chat side by side), phone (stacked)
+ * and video (a phone on its side: the film full-bleed, the room floating over it). The
+ * stage keeps the same place in the tree in all of them, so turning a phone never remounts
+ * the player: a new <video> would lose the browser's permission to play sound.
+ */
+function Room({
+  view,
+  conn,
+  voice,
+  vs,
+  layout,
+  onPick,
+  onSwitch,
+}: {
   view: View;
   conn: RoomConnection;
   voice: VoiceSession;
   vs: VoiceState;
+  layout: PlayerLayout;
   onPick: () => void;
-  onSwitch: () => void;
-};
+  onSwitch?: () => void;
+}) {
+  const mode: Mode = layout === "video" && !view.media ? "short" : layout;
+  const here = view.members.filter((m) => m.status === "online").length;
 
-function WideLayout({ view, conn, voice, vs, onPick, onSwitch }: LayoutProps) {
-  return (
-    <>
-      <div className="absolute inset-y-0 right-[392px] left-0">
-        <Stage view={view} conn={conn} voice={voice} vs={vs} onPick={onPick} onSwitch={onSwitch} />
-        {/* Above the player's own overlays ("Join the screening" z-20), below its cards (z-30). */}
-        <div className="absolute top-[72px] right-3 z-[25]">
-          <VoiceTiles voice={voice} state={vs} />
-        </div>
-      </div>
-      <RoomHeader
-        view={view}
-        conn={conn}
-        voice={<VoiceButtons voice={voice} state={vs} />}
-        speaking={speakingIds(vs)}
-        className="absolute top-3 right-[392px] left-3 z-30"
-      />
-      <aside aria-label="Chat" className="glass-thick absolute top-3 right-3 bottom-3 z-10 flex w-[368px] flex-col overflow-hidden rounded-[24px]">
-        <div className="flex h-14 shrink-0 items-center justify-between px-5">
-          <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-fog-50">Chat</h2>
-          <span className="text-[13px] text-fog-500 tabular-nums">
-            {view.members.filter((m) => m.status === "online").length} here now
-          </span>
-        </div>
-        <div className="h-px shrink-0 bg-gradient-to-r from-transparent via-white/8 to-transparent" />
-        <Chat view={view} conn={conn} />
-      </aside>
-    </>
-  );
-}
-
-// Phone portrait: 16:9 stage under a floating header; chat is a sheet that drags over it,
-// or away entirely (then the stage takes the whole screen).
-function PhoneLayout({ view, conn, voice, vs, onPick, onSwitch }: LayoutProps) {
-  const rootRef = useRef<HTMLDivElement>(null);
-  const sizerRef = useRef<HTMLDivElement>(null);
-  const headerRef = useRef<HTMLDivElement>(null);
-  const [geo, setGeo] = useState({ top: 0, docked: 0, full: 0 });
-  const [mode, setMode] = useState<ChatMode>(readChatMode);
-
-  // One value drives both: the sheet's clip, and below the docked point, the stage's height,
-  // so the film grows with the finger as chat is pulled away.
-  const y = useMotionValue(0);
-  const top = useMotionValue(0);
-  const dockedHeight = useMotionValue(0);
-  const stageHeight = useTransform([y, top, dockedHeight], ([v, t, d]: number[]) => Math.max(d, t + v));
-
-  useLayoutEffect(() => {
-    const measure = () => {
-      const header = headerRef.current!.getBoundingClientRect();
-      const docked = sizerRef.current!.getBoundingClientRect();
-      const full = rootRef.current!.getBoundingClientRect().height;
-      const t = header.bottom + 8;
-      setGeo({ top: t, docked: Math.max(0, docked.bottom - t), full: full - t });
-      top.set(t);
-      dockedHeight.set(docked.height);
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(sizerRef.current!);
-    ro.observe(headerRef.current!);
-    ro.observe(rootRef.current!);
-    return () => ro.disconnect();
-  }, [top, dockedHeight]);
-
-  const changeMode = (m: ChatMode) => {
-    setMode(m);
-    try {
-      if (m === "closed") localStorage.setItem(CHAT_KEY, "closed");
-      else localStorage.removeItem(CHAT_KEY);
-    } catch {
-      // storage blocked: it just won't be remembered
-    }
-  };
-
-  // Messages that arrived while chat was closed, for the header's badge.
+  // Video mode's chat is a drawer; count what arrives while it's shut.
+  const [chatOpen, setChatOpen] = useState(false);
   const seen = useRef(view.chat.length);
-  if (mode !== "closed") seen.current = view.chat.length;
+  if (chatOpen || mode !== "video") seen.current = view.chat.length;
   const unread = view.chat.slice(seen.current).filter((c) => c.kind === "msg" && c.senderId !== view.me).length;
 
+  const top = useCallback(
+    (shown: boolean) => (
+      <>
+        <AnimatePresence>
+          {shown && (
+            <motion.div
+              key="presence"
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4, transition: { duration: 0.15 } }}
+            >
+              <PresencePill view={view} vs={vs} unread={unread} onChat={() => setChatOpen(true)} />
+            </motion.div>
+          )}
+        </AnimatePresence>
+        <FilmTiles view={view} voice={voice} vs={vs} />
+      </>
+    ),
+    [view, vs, voice, unread],
+  );
+  const bar = useCallback(
+    (onMenu: (open: boolean) => void) => (
+      <>
+        <ReactionsPill onReact={(k) => conn.react(k)} quick={["love", "fire"]} size={36} onOpenChange={onMenu} className="mx-1" />
+        <MicButton voice={voice} state={vs} size={40} variant="bare" />
+      </>
+    ),
+    [conn, voice, vs],
+  );
+
+  const wideish = mode === "wide" || mode === "short";
   return (
-    <div ref={rootRef} className="absolute inset-0">
-      {/* Measures the docked stage: full width, 16:9, under the status bar. */}
-      <div ref={sizerRef} aria-hidden className="pointer-events-none invisible absolute inset-x-0 top-0 aspect-video pt-[env(safe-area-inset-top)]" />
-      <motion.div style={{ height: stageHeight }} className="absolute inset-x-0 top-0">
-        <div className={`absolute inset-0 transition-opacity duration-300 ${mode === "open" ? "opacity-40" : ""}`}>
-          <Stage view={view} conn={conn} voice={voice} vs={vs} onPick={onPick} onSwitch={onSwitch} compact />
+    <div className={ROOT[mode]}>
+      {wideish ? (
+        <div className="col-start-1 row-start-1 min-w-0">
+          <RoomHeader view={view} conn={conn} />
         </div>
-        <div className="absolute inset-x-0 top-[calc(60px+env(safe-area-inset-top))] z-[25] flex justify-end">
-          <VoiceTiles voice={voice} state={vs} compact extra={view.media ? <PhoneCameraButton voice={voice} state={vs} /> : null} />
+      ) : mode === "phone" ? (
+        <div className="px-3">
+          <PhoneHeader view={view} conn={conn} voice={voice} vs={vs} onChangeFilm={onPick} onSwitch={onSwitch} />
         </div>
-      </motion.div>
-      <div ref={headerRef} className="absolute inset-x-2 top-[max(8px,env(safe-area-inset-top))] z-30">
-        <RoomHeader
+      ) : null}
+
+      <div className={STAGE[mode]}>
+        <Stage
           view={view}
           conn={conn}
-          voice={<VoiceButtons voice={voice} state={vs} />}
-          speaking={speakingIds(vs)}
-          chat={mode === "closed" ? { unread, onOpen: () => changeMode("docked") } : undefined}
+          layout={mode === "short" ? "wide" : mode}
+          onPick={onPick}
+          onSwitch={onSwitch}
+          duck={vs.duckFilm}
+          top={mode === "video" ? top : undefined}
+          bar={mode === "video" ? bar : undefined}
         />
       </div>
-      {geo.top > 0 && (
-        <ChatSheet y={y} top={geo.top} dockedOffset={geo.docked} closedOffset={geo.full} mode={mode} onModeChange={changeMode}>
-          {(handle) => <Chat view={view} conn={conn} topInset={handle} onComposerFocus={() => changeMode("open")} />}
-        </ChatSheet>
+
+      {mode === "wide" ? (
+        <div className="col-start-1 row-start-3 flex h-[132px] items-center gap-3 rounded-[40px] bg-ink-800 px-5">
+          <div className="w-[152px] shrink-0 max-lg:w-auto">
+            {view.media && <ReactionsPill onReact={(k) => conn.react(k)} size={44} className="w-fit" />}
+          </div>
+          <SeatRow view={view} conn={conn} voice={voice} vs={vs} size="lg" camerasToggle className="flex-1" />
+          <div className="flex w-[152px] shrink-0 justify-end gap-2 max-lg:w-auto">
+            <MicButton voice={voice} state={vs} />
+            <CamButton voice={voice} state={vs} />
+          </div>
+        </div>
+      ) : mode === "phone" ? (
+        <div className="mx-3 mt-3 shrink-0 rounded-[32px] bg-ink-800 py-1">
+          <SeatRow view={view} conn={conn} voice={voice} vs={vs} size="md" />
+        </div>
+      ) : null}
+
+      {wideish ? (
+        <aside aria-label="Chat" className="col-start-2 row-span-full row-start-1 flex min-h-0 flex-col overflow-hidden rounded-[32px] bg-ink-850">
+          <div className="flex h-16 shrink-0 items-center gap-2 pt-1 pr-3.5 pl-6">
+            <h2 className="flex-1 text-[18px] font-semibold tracking-[-0.01em] text-fog-50">Chat</h2>
+            <span className="text-[13px] text-fog-500 tabular-nums">{here ? `${here} here now` : ""}</span>
+            <SoundToggle />
+          </div>
+          <Chat view={view} conn={conn} />
+        </aside>
+      ) : mode === "phone" ? (
+        <Chat
+          view={view}
+          conn={conn}
+          className="mt-1"
+          above={view.media ? <ReactionRow onReact={(k) => conn.react(k)} className="no-scrollbar overflow-x-auto px-3 pb-2" /> : null}
+          lead={
+            <>
+              <MicButton voice={voice} state={vs} size={52} />
+              <CamButton voice={voice} state={vs} size={52} />
+            </>
+          }
+        />
+      ) : (
+        <AnimatePresence>
+          {chatOpen && (
+            <motion.aside
+              key="chat"
+              aria-label="Chat"
+              initial={{ x: "100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "100%", transition: { type: "spring", bounce: 0, duration: 0.3 } }}
+              transition={{ type: "spring", bounce: 0, duration: 0.4 }}
+              className="glass-thick absolute inset-y-0 right-0 z-40 flex w-[min(360px,55vw)] flex-col rounded-l-[28px] pr-[env(safe-area-inset-right)]"
+            >
+              <div className="flex h-14 shrink-0 items-center gap-1 pr-2 pl-5">
+                <h2 className="flex-1 text-[16px] font-semibold text-fog-50">Chat</h2>
+                <SoundToggle />
+                <button
+                  onClick={() => setChatOpen(false)}
+                  aria-label="Close chat"
+                  className="press grid size-10 place-items-center rounded-full text-fog-300 hover:bg-white/10"
+                >
+                  <XIcon size={18} />
+                </button>
+              </div>
+              <Chat view={view} conn={conn} />
+            </motion.aside>
+          )}
+        </AnimatePresence>
       )}
     </div>
   );
 }
 
-const CHAT_KEY = "anda.chat";
-
-function speakingIds(vs: VoiceState): Set<number> {
-  return new Set(vs.peers.filter((p) => p.speaking).map((p) => p.id));
-}
-
-function readChatMode(): ChatMode {
-  try {
-    return localStorage.getItem(CHAT_KEY) === "closed" ? "closed" : "docked";
-  } catch {
-    return "docked";
-  }
-}
-
-// The player once a film is picked; before that, the idle screen.
-function Stage({ view, conn, vs, onPick, onSwitch, compact }: LayoutProps & { compact?: boolean }) {
+// The player once a film is picked; before that, the empty screen.
+function Stage({
+  view,
+  conn,
+  layout,
+  onPick,
+  onSwitch,
+  duck,
+  top,
+  bar,
+}: {
+  view: View;
+  conn: RoomConnection;
+  layout: PlayerLayout;
+  onPick: () => void;
+  onSwitch?: () => void;
+  duck: boolean;
+  top?: (shown: boolean) => React.ReactNode;
+  bar?: (onMenu: (open: boolean) => void) => React.ReactNode;
+}) {
   if (view.media && view.playback) {
     // No key per film: the same <video> element carries on across films and release
     // switches, so a browser that allowed sound once keeps allowing it.
     return (
-      <Player
-        view={view}
-        conn={conn}
-        compact={compact}
-        duck={vs.duckFilm}
-        onChangeFilm={onPick}
-        onSwitch={view.media.catalog_id ? onSwitch : undefined}
-      />
+      <Player view={view} conn={conn} layout={layout} duck={duck} onChangeFilm={onPick} onSwitch={onSwitch} top={top} bar={bar} />
     );
   }
-  return (
-    <Projector variant="stage" className="absolute inset-0">
-      <StageMessage
-        view={view}
-        onPick={onPick}
-        compact={compact}
-        className={compact ? "absolute inset-x-0 top-[calc(56px+env(safe-area-inset-top))] bottom-0" : "absolute inset-0"}
-      />
-    </Projector>
-  );
+  return <EmptyScreen view={view} onPick={onPick} compact={layout === "phone"} />;
 }
 
-function StageMessage({
-  view,
-  onPick,
-  compact,
-  className = "",
-}: {
-  view: View;
-  onPick: () => void;
-  compact?: boolean;
-  className?: string;
-}) {
+function EmptyScreen({ view, onPick, compact }: { view: View; onPick: () => void; compact?: boolean }) {
   const isHost = view.me === view.host;
   const host = view.members.find((m) => m.user_id === view.host)?.username;
   return (
-    <div className={`flex items-center justify-center p-6 ${className}`}>
+    <div className="absolute inset-0 flex items-center justify-center p-6">
       {view.joined ? (
-        <div key="ready" className="enter flex max-w-[34ch] flex-col items-center gap-3 text-center">
-          {!compact && (
-            <span className="grid size-14 place-items-center rounded-2xl bg-white/5 text-fog-300 ring-1 ring-white/8 backdrop-blur-md">
-              <FilmSlateIcon size={28} weight="duotone" />
-            </span>
-          )}
-          <p className={`font-semibold tracking-[-0.02em] text-fog-50 ${compact ? "text-[17px]" : "text-2xl"}`}>
-            {isHost ? "What are we watching?" : "The screen\u2019s warming up"}
+        <div key="ready" className={`enter flex max-w-[36ch] flex-col items-center text-center ${compact ? "gap-2" : "gap-4"}`}>
+          <span className={`grid place-items-center rounded-full bg-ink-800 text-plum-200 ${compact ? "size-12" : "size-24"}`}>
+            <FilmSlateIcon size={compact ? 24 : 44} weight="duotone" />
+          </span>
+          <p className={`font-semibold tracking-[-0.025em] text-fog-50 ${compact ? "text-[18px]" : "mt-2 text-[32px] leading-tight"}`}>
+            {isHost ? "What are we watching?" : "The screen’s warming up"}
           </p>
           {isHost ? (
-            <Button size={compact ? "md" : "lg"} onClick={onPick} className={compact ? "mt-1" : "mt-2"}>
-              <FilmStripIcon size={20} weight="bold" /> Pick a film
+            <Button size={compact ? "md" : "lg"} onClick={onPick} className={compact ? "" : "mt-1"}>
+              <FilmReelIcon size={20} weight="bold" /> Pick a film
             </Button>
           ) : (
-            <p className={`leading-relaxed text-fog-300/80 ${compact ? "text-[13px]" : "text-[15px]"}`}>
-              Waiting for {host ?? "the host"} to pick a film. The chat&rsquo;s open in the meantime.
-            </p>
+            <p className={`text-fog-300 ${compact ? "text-[14px]" : "text-[17px]"}`}>{host ?? "The host"} is picking a film.</p>
           )}
         </div>
       ) : (
         <p key="finding" className="enter inline-flex items-center gap-2.5 text-[15px] font-medium text-fog-300">
-          <Spinner size={16} className="text-ember-400" /> Finding your seat
+          <Spinner size={16} className="text-plum-200" /> Finding your seat
         </p>
       )}
     </div>

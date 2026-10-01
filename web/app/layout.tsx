@@ -17,13 +17,13 @@ export const viewport: Viewport = {
   viewportFit: "cover", // paint under the notch; content pads itself with env(safe-area-inset-*)
   interactiveWidget: "resizes-content", // Android keyboard shrinks the layout, like iOS
   colorScheme: "dark",
-  themeColor: "#0b0a09",
+  themeColor: "#11100e",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${geist.variable} ${geistMono.variable}`}>
-      <body className="min-h-[100dvh] bg-ink-950 text-fog-100 antialiased">
+      <body className="min-h-[100dvh] bg-ink-900 text-fog-100 antialiased">
         <Providers>{children}</Providers>
       </body>
     </html>

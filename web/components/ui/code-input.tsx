@@ -20,7 +20,7 @@ export function CodeInput({ value, onChange, onComplete, invalid, disabled, shak
   return (
     <div
       key={shakeKey}
-      className={`group relative w-full max-w-[360px] ${invalid && shakeKey ? "animate-shake motion-reduce:animate-none" : ""}`}
+      className={`group relative w-full max-w-[434px] ${invalid && shakeKey ? "animate-shake motion-reduce:animate-none" : ""}`}
       onClick={() => ref.current?.focus()}
     >
       <input
@@ -42,7 +42,7 @@ export function CodeInput({ value, onChange, onComplete, invalid, disabled, shak
         maxLength={LEN}
         className="absolute inset-0 z-10 size-full cursor-text opacity-0"
       />
-      <div className="grid grid-cols-6 gap-2" aria-hidden>
+      <div className="grid grid-cols-6 gap-2.5 max-sm:gap-2" aria-hidden>
         {Array.from({ length: LEN }, (_, i) => {
           const char = value[i];
           const active = i === Math.min(value.length, LEN - 1);
@@ -50,21 +50,16 @@ export function CodeInput({ value, onChange, onComplete, invalid, disabled, shak
             <div
               key={i}
               data-active={active || undefined}
-              className={`grid aspect-[4/5] place-items-center rounded-xl bg-ink-850 font-mono text-2xl font-medium text-fog-50 transition-shadow duration-150 ${
+              className={`grid aspect-square place-items-center rounded-[23px] bg-ink-800 font-mono text-[28px] text-fog-50 transition-shadow duration-150 max-sm:rounded-[18px] max-sm:text-2xl ${
                 invalid
-                  ? "text-danger shadow-[inset_0_0_0_1.5px_var(--color-danger)]"
-                  : "shadow-[inset_0_0_0_1px_var(--color-ink-700)] group-focus-within:shadow-[inset_0_0_0_1px_var(--color-ink-600)] group-focus-within:data-active:shadow-[inset_0_0_0_1.5px_var(--color-ember-500),0_0_0_4px_color-mix(in_oklab,var(--color-ember-500)_18%,transparent)]"
+                  ? "text-danger shadow-[inset_0_0_0_2px_var(--color-danger)]"
+                  : "group-focus-within:data-active:shadow-[inset_0_0_0_2px_var(--color-plum-400)]"
               }`}
             >
               {char ??
                 (active ? (
-                  <>
-                    <span className="size-1.5 rounded-full bg-ink-600 group-focus-within:hidden" />
-                    <span className="hidden h-7 w-0.5 rounded-full bg-ember-400 group-focus-within:block group-focus-within:animate-caret motion-reduce:animate-none" />
-                  </>
-                ) : (
-                  <span className="size-1.5 rounded-full bg-ink-600" />
-                ))}
+                  <span className="hidden h-7 w-0.5 rounded-full bg-plum-400 group-focus-within:block group-focus-within:animate-caret motion-reduce:animate-none" />
+                ) : null)}
             </div>
           );
         })}

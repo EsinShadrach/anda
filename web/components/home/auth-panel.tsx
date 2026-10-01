@@ -1,15 +1,26 @@
 import { useState } from "react";
 import { motion } from "motion/react";
-import { TicketIcon, WarningCircleIcon } from "@phosphor-icons/react";
-import { api, ApiError, type User } from "@/lib/api";
+import { CouchIcon, WarningCircleIcon } from "@phosphor-icons/react";
+import { api, ApiError, type Invite, type User } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
+import { Avatar } from "@/components/ui/avatar";
 
 type Mode = "login" | "signup";
 
 const USERNAME_RE = /^[A-Za-z0-9_]{3,20}$/;
 
-export function AuthPanel({ onAuthed, inviteCode }: { onAuthed: (u: User) => void; inviteCode?: string }) {
+export function AuthPanel({
+  onAuthed,
+  inviteCode,
+  invite,
+}: {
+  onAuthed: (u: User) => void;
+  inviteCode?: string; // came from an invite link: they join that room once in
+  // Its preview: undefined while loading, "missing" for a code with no room, null if it
+  // didn't load.
+  invite?: Invite | "missing" | null;
+}) {
   const [mode, setMode] = useState<Mode>(inviteCode ? "signup" : "login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -40,35 +51,30 @@ export function AuthPanel({ onAuthed, inviteCode }: { onAuthed: (u: User) => voi
   }
 
   return (
-    <div className="flex flex-col gap-8">
+    <div className="flex flex-col gap-[18px] sm:gap-6">
       {inviteCode ? (
-        <div className="enter flex flex-col gap-4">
-          <span className="inline-flex w-fit items-center gap-2 rounded-full bg-ember-500/12 px-3 py-1.5 text-[13px] font-medium text-ember-300 ring-1 ring-ember-500/25">
-            <TicketIcon size={16} weight="fill" />
-            Invite to room <span className="font-mono tracking-[0.12em]">{inviteCode}</span>
-          </span>
-          <h1 className="text-[40px] leading-[1.02] font-semibold tracking-[-0.035em] text-fog-50 sm:text-5xl">
-            Your seat&rsquo;s
-            <span className="block text-balance text-fog-500">being saved.</span>
-          </h1>
-          <p className="max-w-[40ch] text-[17px] leading-relaxed text-fog-300">
-            Create an account or log in, and you&rsquo;ll go straight into the room.
-          </p>
+        <div className="enter flex flex-col gap-[18px] sm:gap-6">
+          <InviteCard code={inviteCode} invite={invite} />
+          <h1 className="text-[36px] leading-[1.05] font-semibold tracking-[-0.035em] text-fog-50 sm:text-[48px]">Pull up a seat.</h1>
         </div>
       ) : (
-        <div className="enter flex flex-col gap-4">
-          <h1 className="text-[40px] leading-[1.02] font-semibold tracking-[-0.035em] text-fog-50 sm:text-5xl">
-            Movie night,
-            <span className="block text-balance text-fog-500">wherever everyone is.</span>
+        <div className="enter flex flex-col gap-3">
+          <h1 className="text-[36px] leading-[1.05] font-semibold tracking-[-0.035em] text-fog-50 sm:text-[52px] sm:leading-[1.02]">
+            {signup ? (
+              "Pull up a seat."
+            ) : (
+              <>
+                Your seat&rsquo;s <br className="max-sm:hidden" />
+                waiting.
+              </>
+            )}
           </h1>
-          <p className="max-w-[40ch] text-[17px] leading-relaxed text-fog-300">
-            Start a room, share the code, and watch the same moment together. The chat rides along.
-          </p>
+          <p className="text-[18px] leading-normal text-fog-300 max-sm:hidden">Watch films together, at the same moment, from anywhere.</p>
         </div>
       )}
 
-      <form onSubmit={submit} noValidate className="flex flex-col gap-5">
-        <div role="tablist" aria-label="Account" className="relative grid grid-cols-2 rounded-2xl bg-ink-850 p-1 ring-1 ring-ink-700">
+      <form onSubmit={submit} noValidate className="flex flex-col gap-[18px] sm:gap-6">
+        <div role="tablist" aria-label="Account" className="relative grid grid-cols-2 gap-1 rounded-full bg-ink-800 p-1">
           {(["login", "signup"] as const).map((m) => (
             <button
               key={m}
@@ -79,17 +85,18 @@ export function AuthPanel({ onAuthed, inviteCode }: { onAuthed: (u: User) => voi
                 setMode(m);
                 setError("");
               }}
-              className={`relative h-10 rounded-xl text-[15px] font-semibold transition-colors duration-200 ${mode === m ? "text-fog-50" : "text-fog-500 hover:text-fog-300"
-                }`}
+              className={`relative h-11 rounded-full text-[15px] font-semibold transition-colors duration-200 ${
+                mode === m ? "text-fog-50" : "text-fog-500 hover:text-fog-300"
+              }`}
             >
               {mode === m && (
                 <motion.span
                   layoutId="auth-tab"
-                  className="absolute inset-0 rounded-xl bg-ink-700 shadow-[inset_0_1px_0_rgb(255_255_255/0.06)]"
+                  className="absolute inset-0 rounded-full bg-ink-700"
                   transition={{ type: "spring", bounce: 0, duration: 0.35 }}
                 />
               )}
-              <span className="relative">{m === "login" ? "Log in" : "Create account"}</span>
+              <span className="relative">{m === "login" ? "Log in" : "Sign up"}</span>
             </button>
           ))}
         </div>
@@ -104,8 +111,7 @@ export function AuthPanel({ onAuthed, inviteCode }: { onAuthed: (u: User) => voi
           autoCorrect="off"
           spellCheck={false}
           maxLength={20}
-          placeholder={signup ? "e.g. rafe" : undefined}
-          hint={signup ? "Letters, numbers and underscores. This is what friends see." : undefined}
+          placeholder={signup ? "What friends will see" : undefined}
           error={usernameError}
         />
         <Field
@@ -116,21 +122,53 @@ export function AuthPanel({ onAuthed, inviteCode }: { onAuthed: (u: User) => voi
           onBlur={() => setTouched((t) => ({ ...t, password: true }))}
           autoComplete={signup ? "new-password" : "current-password"}
           enterKeyHint="go"
-          hint={signup ? "At least 8 characters." : undefined}
+          placeholder={signup ? "At least 8 characters" : undefined}
           error={passwordError}
         />
 
         {error && (
-          <p role="alert" className="enter flex items-start gap-2 rounded-xl bg-danger/10 px-3.5 py-3 text-[14px] leading-snug text-danger ring-1 ring-danger/20">
+          <p role="alert" className="enter flex items-start gap-2 rounded-[22px] bg-danger/10 px-4 py-3 text-[14px] leading-snug text-danger">
             <WarningCircleIcon size={18} weight="fill" className="mt-px shrink-0" />
             {error}
           </p>
         )}
 
-        <Button type="submit" size="lg" loading={busy} disabled={!username || !password} className="mt-1 w-full">
-          {signup ? (inviteCode ? "Create account and join" : "Create my account") : inviteCode ? "Log in and join" : "Log in"}
+        <Button type="submit" size="xl" loading={busy} disabled={!username || !password} className="mt-1 h-[60px] w-full text-[17px]">
+          {signup ? (inviteCode ? "Create account and join" : "Create account") : inviteCode ? "Log in and join" : "Log in"}
         </Button>
       </form>
+    </div>
+  );
+}
+
+// Who sent you here: their initial, "Rafe invited you to a room", and the code.
+function InviteCard({ code, invite }: { code: string; invite?: Invite | "missing" | null }) {
+  const owner = invite && invite !== "missing" ? invite.owner : undefined;
+  const missing = invite === "missing";
+  return (
+    <div className="flex items-center gap-3.5 rounded-[28px] bg-ink-800 px-[18px] py-3.5">
+      {owner ? (
+        <Avatar name={owner} size={44} />
+      ) : (
+        <span
+          className={`grid size-11 shrink-0 place-items-center rounded-full bg-ink-600 text-fog-300 ${invite === undefined ? "skeleton" : ""}`}
+          aria-hidden
+        >
+          {invite !== undefined && <CouchIcon size={20} />}
+        </span>
+      )}
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <p className={`truncate text-[15px] ${missing ? "text-fog-300" : "text-fog-100"}`}>
+          {owner
+            ? `${owner} invited you to a room`
+            : missing
+              ? "There\u2019s no room with this code"
+              : invite === undefined
+                ? "\u00a0"
+                : "You\u2019re invited to a room"}
+        </p>
+        <p className={`font-mono text-[14px] tracking-[0.14em] ${missing ? "text-fog-500 line-through" : "text-plum-200"}`}>{code}</p>
+      </div>
     </div>
   );
 }

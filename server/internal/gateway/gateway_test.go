@@ -44,7 +44,7 @@ func newEnvAt(t *testing.T, dbPath string) *env {
 	rm := rooms.NewManager(db, db, fakeMedia{}, log)
 	mux := http.NewServeMux()
 	a.Register(mux)
-	(&rooms.Handlers{Manager: rm, Users: db, Authenticate: a.UserFromRequest, Log: log}).Register(mux)
+	(&rooms.Handlers{Manager: rm, Users: db, Authenticate: a.UserFromRequest, AllowPreview: a.AllowPreview, Log: log}).Register(mux)
 	New(a.UserFromRequest, rm, nil, log).Register(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -311,11 +311,47 @@ func (e *env) do(method, path, cookie string, v any) int {
 
 type visitList struct {
 	Rooms []struct {
-		Code   string `json:"code"`
-		Owner  string `json:"owner"`
-		Mine   bool   `json:"mine"`
-		Online int    `json:"online"`
+		Code   string   `json:"code"`
+		Owner  string   `json:"owner"`
+		Mine   bool     `json:"mine"`
+		Online int      `json:"online"`
+		Here   []string `json:"here"`
 	} `json:"rooms"`
+}
+
+// An invite link shows whose room it is and who's in it, before signing in.
+func TestInvitePreview(t *testing.T) {
+	e := newEnv(t)
+	rafe, chimamanda := e.signup("rafe"), e.signup("chimamanda")
+	code := e.createRoom(rafe)
+
+	var inv struct {
+		Code   string   `json:"code"`
+		Owner  string   `json:"owner"`
+		Online int      `json:"online"`
+		Here   []string `json:"here"`
+	}
+	if s := e.do("GET", "/api/invites/"+code, "", &inv); s != http.StatusOK || inv.Owner != "rafe" || inv.Online != 0 {
+		t.Fatalf("empty room: %d %+v", s, inv)
+	}
+	b := e.dial(chimamanda)
+	b.hello("")
+	b.send(protocol.TypeJoinRoom, protocol.JoinRoom{Code: code})
+	b.expect(protocol.TypeRoomState, nil)
+	if s := e.do("GET", "/api/invites/"+code, "", &inv); s != http.StatusOK || inv.Online != 1 || len(inv.Here) != 1 || inv.Here[0] != "chimamanda" {
+		t.Fatalf("with a guest: %d %+v", s, inv)
+	}
+	if s := e.do("GET", "/api/invites/ZZZZZZ", "", nil); s != http.StatusNotFound {
+		t.Fatalf("unknown code: %d", s)
+	}
+	// Guessing codes runs out quickly.
+	limited := false
+	for i := 0; i < 80 && !limited; i++ {
+		limited = e.do("GET", "/api/invites/ZZZZZZ", "", nil) == http.StatusTooManyRequests
+	}
+	if !limited {
+		t.Fatal("invite previews aren't rate limited")
+	}
 }
 
 func TestVisitedRoomsForgetAndEnd(t *testing.T) {
@@ -335,7 +371,8 @@ func TestVisitedRoomsForgetAndEnd(t *testing.T) {
 		t.Fatalf("owner's list: %+v", list)
 	}
 	e.do("GET", "/api/me/rooms", chimamanda, &list)
-	if len(list.Rooms) != 1 || list.Rooms[0].Mine || list.Rooms[0].Owner != "rafe" || list.Rooms[0].Online != 1 {
+	if len(list.Rooms) != 1 || list.Rooms[0].Mine || list.Rooms[0].Owner != "rafe" || list.Rooms[0].Online != 1 ||
+		len(list.Rooms[0].Here) != 1 || list.Rooms[0].Here[0] != "chimamanda" {
 		t.Fatalf("guest's list: %+v", list)
 	}
 

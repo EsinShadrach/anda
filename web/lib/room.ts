@@ -43,6 +43,12 @@ export const REACTIONS = ["laugh", "love", "wow", "sad", "clap", "fire"] as cons
 export type ReactionKind = (typeof REACTIONS)[number];
 export type FloatingReaction = { id: number; kind: ReactionKind; by: string; self: boolean };
 
+/** Something someone else did that's worth a sound (lib/sounds.ts). */
+export type RoomEvent = { kind: "joined" | "left" | "message" | "typing"; userId: number };
+
+/** Someone else whose message box has text in it. */
+export type Typist = { id: number; name: string };
+
 export type PlaybackState = { want: "playing" | "paused"; position: number; rate: number; server_time: number };
 
 export type Blocker = { user_id: number; username: string; reason: "buffering" | "getting_ready" };
@@ -87,11 +93,17 @@ export type RoomView = {
   stillThere: { at: number } | null;
   /** Reactions floating over the film right now (they fade after a few seconds). */
   reactions: FloatingReaction[];
+  /** Others typing right now, in the order they started. */
+  typing: Typist[];
 };
 
 type Envelope = { type: string; v: number; payload?: any };
 
 const TOKEN_KEY = "anda.resume";
+
+// Typing: we repeat "still typing" this often; others drop us after TYPING_LAPSE_MS without one.
+const TYPING_REPEAT_MS = 2500;
+const TYPING_LAPSE_MS = 6000;
 
 // Away longer than this (asleep, tab hidden, socket down) and we come back paused.
 const WAKE_GAP_MS = 30_000;
@@ -165,6 +177,7 @@ export class RoomConnection {
       gate: null,
       stillThere: null,
       reactions: [],
+      typing: [],
     };
   }
 
@@ -217,6 +230,59 @@ export class RoomConnection {
     const id = ++this.reactionSeq;
     this.set({ reactions: [...this.view.reactions.slice(-24), { id, kind, by, self }] });
     setTimeout(() => this.set({ reactions: this.view.reactions.filter((r) => r.id !== id) }), 3200);
+  }
+
+  // --- Typing -------------------------------------------------------------------------
+
+  private typingSentAt = 0; // when we last said we're typing; 0 if we've said we stopped
+  private typingTimers = new Map<number, ReturnType<typeof setTimeout>>();
+
+  /**
+   * Our message box has text in it (true), or not any more (false). While it does, a
+   * repeat goes out every few seconds so others' indicators don't lapse.
+   */
+  typing(active: boolean) {
+    if (this.view.status !== "open" || !this.view.joined) return;
+    const now = Date.now();
+    if (active) {
+      if (this.typingSentAt && now - this.typingSentAt < TYPING_REPEAT_MS) return;
+      this.typingSentAt = now;
+      this.send("typing_send", { active: true });
+    } else if (this.typingSentAt) {
+      this.typingSentAt = 0;
+      this.send("typing_send", { active: false });
+    }
+  }
+
+  private setTyping(id: number, name: string, active: boolean) {
+    clearTimeout(this.typingTimers.get(id));
+    this.typingTimers.delete(id);
+    const was = this.view.typing.some((t) => t.id === id);
+    if (active) {
+      // Lapses on its own if the repeats stop (their tab closed, their network dropped).
+      this.typingTimers.set(id, setTimeout(() => this.setTyping(id, name, false), TYPING_LAPSE_MS));
+      if (!was) {
+        this.set({ typing: [...this.view.typing, { id, name }] });
+        this.emit({ kind: "typing", userId: id });
+      }
+    } else if (was) {
+      this.set({ typing: this.view.typing.filter((t) => t.id !== id) });
+    }
+  }
+
+  // --- Events, for sounds ---------------------------------------------------------------
+
+  private eventListeners = new Set<(e: RoomEvent) => void>();
+
+  onEvent(fn: (e: RoomEvent) => void) {
+    this.eventListeners.add(fn);
+    return () => {
+      this.eventListeners.delete(fn);
+    };
+  }
+
+  private emit(e: RoomEvent) {
+    if (e.userId !== this.view.me) this.eventListeners.forEach((fn) => fn(e));
   }
 
   hostTransfer(userId: number) {
@@ -317,6 +383,8 @@ export class RoomConnection {
     clearTimeout(this.toastTimer);
     clearInterval(this.pingTimer);
     clearInterval(this.heartbeat);
+    this.typingTimers.forEach((t) => clearTimeout(t));
+    this.typingTimers.clear();
     document.removeEventListener("visibilitychange", this.onVisibility);
     if (this.ws?.readyState === WebSocket.OPEN) this.send("leave_room");
     this.ws?.close(1000);
@@ -334,6 +402,7 @@ export class RoomConnection {
     const trimmed = text.trim();
     if (!trimmed || this.view.status !== "open") return false;
     const clientId = `c${Date.now().toString(36)}${(this.nextClientId++).toString(36)}`;
+    this.typingSentAt = 0; // the message tells everyone we stopped; typing again starts afresh
     const me = this.view.members.find((m) => m.user_id === this.view.me);
     this.set({
       chat: [
@@ -416,7 +485,11 @@ export class RoomConnection {
         this.droppedAt = 0;
         // Keep our own unsent messages; they'll be echoed or re-sent by the user.
         const pending = this.view.chat.filter((c) => c.kind === "msg" && c.pending);
+        // Whoever was typing before a reconnect will say so again if they still are.
+        this.typingTimers.forEach((t) => clearTimeout(t));
+        this.typingTimers.clear();
         this.set({
+          typing: [],
           joined: true,
           notFound: false,
           host: payload.host,
@@ -459,6 +532,9 @@ export class RoomConnection {
       case "reaction":
         if ((REACTIONS as readonly string[]).includes(payload.kind)) this.float(payload.kind, payload.by?.username ?? "", false);
         break;
+      case "typing":
+        if (payload.by?.id && payload.by.id !== this.view.me) this.setTyping(payload.by.id, payload.by.username ?? "", !!payload.active);
+        break;
       case "still_there":
         if (!this.view.gate) this.set({ stillThere: { at: Date.now() } });
         break;
@@ -484,6 +560,10 @@ export class RoomConnection {
         } else {
           this.set({ chat: [...this.view.chat, item] });
         }
+        if (item.kind === "msg" && item.senderId !== this.view.me) {
+          this.setTyping(item.senderId, item.sender, false);
+          this.emit({ kind: "message", userId: item.senderId });
+        }
         break;
       }
       case "member_update": {
@@ -504,6 +584,8 @@ export class RoomConnection {
           system = `${username} joined`;
         }
         this.set({ members, chat: system ? [...this.view.chat, sys(system)] : this.view.chat });
+        if (status !== "online") this.setTyping(user_id, username, false);
+        if (system) this.emit({ kind: status === "left" ? "left" : "joined", userId: user_id });
         break;
       }
       case "host_changed": {

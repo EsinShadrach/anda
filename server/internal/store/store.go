@@ -86,6 +86,9 @@ type VisitedRoom struct {
 	Room
 	OwnerName    string
 	LastJoinedAt time.Time
+	// The film it left off on (MediaID), if that film is still here.
+	FilmTitle  string
+	FilmPoster string
 }
 
 type Chat interface {

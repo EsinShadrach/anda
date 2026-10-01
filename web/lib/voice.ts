@@ -239,7 +239,10 @@ export class VoiceSession {
 
   private async ready(): Promise<Room | null> {
     if (this.room) return this.room;
-    if (this.state.status === "unavailable") return null;
+    if (this.state.status === "unavailable") {
+      this.flash("Voice isn’t set up on this server");
+      return null;
+    }
     if (this.state.status === "failed" || this.state.status === "idle") await this.start();
     if (!this.room) this.flash("Voice can’t connect right now");
     return this.room;

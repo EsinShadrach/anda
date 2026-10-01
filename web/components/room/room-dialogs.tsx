@@ -63,9 +63,9 @@ function Dialog({
         animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
         exit={{ opacity: 0, scale: 0.97, filter: "blur(4px)", transition: { duration: 0.15 } }}
         transition={{ type: "spring", bounce: 0, duration: 0.35 }}
-        className="glass-thick flex w-full max-w-[380px] flex-col gap-4 rounded-[28px] p-7"
+        className="glass-thick flex w-full max-w-[380px] flex-col gap-4 rounded-[32px] p-7"
       >
-        <span className="grid size-12 place-items-center rounded-2xl bg-ember-500/12 text-ember-400 ring-1 ring-ember-500/20">
+        <span className="grid size-14 place-items-center rounded-full bg-ink-800 text-plum-200">
           {icon}
         </span>
         <div className="flex flex-col gap-2">

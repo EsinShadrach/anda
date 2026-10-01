@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -28,6 +29,8 @@ const (
 	// Reactions: a burst of reactBurst (a flurry of laughs is fine), then one per reactRefill.
 	reactBurst  = 8
 	reactRefill = 400 * time.Millisecond
+	// Typing repeats are relayed at most this often; anything faster is dropped.
+	typingEvery = 2 * time.Second
 )
 
 type member struct {
@@ -42,6 +45,9 @@ type member struct {
 
 	reactTokens float64
 	reactAt     time.Time
+
+	typing   bool      // last relayed: their composer has text in it
+	typingAt time.Time // when "typing" was last relayed
 
 	seekTokens   float64
 	seekAt       time.Time
@@ -185,6 +191,7 @@ func (r *Room) detach(userID int64, s Sender) {
 	}
 	mem.sender = nil
 	mem.status = protocol.StatusAway
+	mem.typing = false // clients drop "typing" for anyone who goes away
 	mem.epoch++
 	epoch := mem.epoch
 	r.broadcast(protocol.TypeMemberUpdate, protocol.MemberUpdate{UserID: userID, Username: mem.user.Username, Status: mem.status})
@@ -254,6 +261,7 @@ func (r *Room) sendChat(userID int64, s Sender, in protocol.ChatSend) {
 		return
 	}
 	mem.chatTokens--
+	mem.typing = false // the message itself tells everyone they've stopped
 	r.active(mem)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -297,11 +305,24 @@ func (r *Room) snapshot() protocol.RoomState {
 	}
 }
 
-func (r *Room) filmTitle() string {
-	if r.pb.media == nil {
-		return ""
+// visit is what a profile shows of a live room: who's in it and what's on.
+func (r *Room) visit() Visit {
+	var v Visit
+	online := make([]*member, 0, len(r.members))
+	for _, m := range r.members {
+		if m.status == protocol.StatusOnline {
+			online = append(online, m)
+		}
 	}
-	return r.pb.media.Title
+	sort.Slice(online, func(i, j int) bool { return online[i].joinedAt < online[j].joinedAt })
+	v.Online = len(online)
+	for _, m := range online[:min(len(online), visitNames)] {
+		v.Here = append(v.Here, m.user.Username)
+	}
+	if r.pb.media != nil {
+		v.Film, v.Poster = r.pb.media.Title, r.pb.media.Poster
+	}
+	return v
 }
 
 func (r *Room) onlineCount() int {

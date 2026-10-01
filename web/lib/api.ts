@@ -43,12 +43,18 @@ export type VisitedRoom = {
   owner: string;
   mine: boolean;
   online: number;
-  film?: string; // on screen right now
+  here?: string[]; // who's in it now (a few names, in join order)
+  film?: string; // on screen now, or the one it left off on
+  poster?: string;
   created_at: number; // unix ms
   last_joined_at: number; // unix ms
 };
 
+/** What an invite link shows before signing in: whose room, and who's in it now. */
+export type Invite = { code: string; owner?: string; online: number; here?: string[] };
+
 export const rooms = {
+  invite: (code: string) => request<Invite>("GET", `/api/invites/${encodeURIComponent(code)}`),
   create: () => request<{ room: RoomInfo }>("POST", "/api/rooms").then((r) => r.room),
   get: (code: string) =>
     request<{ room: RoomInfo }>("GET", `/api/rooms/${encodeURIComponent(code)}`).then((r) => r.room),

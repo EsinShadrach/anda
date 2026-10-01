@@ -52,6 +52,7 @@ type Service struct {
 	loginPerAccount *limiter
 	loginPerIP      *limiter
 	signupPerIP     *limiter
+	previewPerIP    *limiter
 
 	dummyOnce sync.Once
 	dummyHash string
@@ -66,6 +67,7 @@ func New(users store.Users, sessions store.Sessions, cfg Config, log *slog.Logge
 		loginPerAccount: newLimiter(5, 15*time.Minute),
 		loginPerIP:      newLimiter(20, 15*time.Minute),
 		signupPerIP:     newLimiter(10, time.Hour),
+		previewPerIP:    newLimiter(60, 15*time.Minute),
 	}
 }
 
@@ -93,6 +95,7 @@ func (s *Service) RunJanitor(ctx context.Context) {
 			s.loginPerAccount.sweep(now)
 			s.loginPerIP.sweep(now)
 			s.signupPerIP.sweep(now)
+			s.previewPerIP.sweep(now)
 		}
 	}
 }
@@ -278,6 +281,17 @@ func (s *Service) dummy() string {
 		s.dummyHash, _ = hashPassword("anda-dummy-password")
 	})
 	return s.dummyHash
+}
+
+// AllowPreview counts a signed-out look at an invite (whose room, who's in it) against the
+// client's IP: plenty for real invite links, far too few to walk the code space.
+func (s *Service) AllowPreview(r *http.Request) bool {
+	ip, now := s.clientIP(r), time.Now()
+	if blocked, _ := s.previewPerIP.blocked(ip, now); blocked {
+		return false
+	}
+	s.previewPerIP.add(ip, now)
+	return true
 }
 
 func (s *Service) clientIP(r *http.Request) string {

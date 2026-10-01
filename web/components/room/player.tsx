@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   ArrowClockwiseIcon,
@@ -7,7 +7,7 @@ import {
   CloudSlashIcon,
   CornersInIcon,
   CornersOutIcon,
-  FilmStripIcon,
+  FilmReelIcon,
   LockSimpleIcon,
   LockSimpleOpenIcon,
   PauseIcon,
@@ -20,7 +20,7 @@ import { PlayerSync } from "@/lib/player-sync";
 import { attachHls, type HlsSource, type Quality } from "@/lib/hls-source";
 import { SubtitleTrack } from "@/lib/subtitles";
 import type { Track } from "@/lib/room";
-import { ReactionButton, ReactionLayer, TracksMenu, type AddonSubtitle, type SubtitleChoice } from "./player-extras";
+import { ControlButton, ReactionButton, ReactionLayer, TracksMenu, type AddonSubtitle, type SubtitleChoice } from "./player-extras";
 import { useProgress } from "@/lib/use-progress";
 import { Spinner } from "@/components/ui/spinner";
 import type { Progress } from "@/lib/api";
@@ -29,21 +29,30 @@ const IDLE_MS = 2600;
 const NUDGE_MS = 45_000;
 const ANSWER_MS = 120_000; // the server marks us away if "Still watching?" goes unanswered this long
 
+export type PlayerLayout = "wide" | "phone" | "video";
+
 export function Player({
   view,
   conn,
-  compact,
+  layout,
   onChangeFilm,
   onSwitch,
   duck,
+  top,
+  bar,
 }: {
   view: RoomView;
   conn: RoomConnection;
   duck?: boolean; // someone on voice is talking: lower the film
-  compact?: boolean; // phone portrait: two-row controls
+  // wide: a floating bar; phone: a centre play button and a slim bottom row; video: phone
+  // landscape, the film full-bleed with everything over it.
+  layout: PlayerLayout;
   onChangeFilm: () => void;
   onSwitch?: () => void; // another release of this film, same timestamp (Library films only)
+  top?: (shown: boolean) => React.ReactNode; // video mode: who's here and cameras (top right)
+  bar?: (onMenu: (open: boolean) => void) => React.ReactNode; // video mode: reactions and mic
 }) {
+  const compact = layout !== "wide";
   const [sync] = useState(() => new PlayerSync(conn));
   useEffect(() => sync.duck(!!duck), [sync, duck]);
   const ps = useSyncExternalStore(sync.subscribe, sync.getSnapshot, sync.getSnapshot);
@@ -131,9 +140,12 @@ export function Player({
   const [sub, setSub] = useState<SubtitleChoice>(null);
   const [subOffset, setSubOffset] = useState(0);
   const [addonSubs, setAddonSubs] = useState<AddonSubtitle[] | "loading" | "idle">("idle");
+  const [cues, setCues] = useState<VTTCue[]>([]); // on screen now; we draw them (SubtitleLayer)
   useEffect(() => {
-    subsRef.current = new SubtitleTrack(videoRef.current!);
-    return () => subsRef.current?.dispose();
+    const track = new SubtitleTrack(videoRef.current!);
+    subsRef.current = track;
+    track.onCues(setCues);
+    return () => track.dispose();
   }, []);
   useEffect(() => {
     // A new film: its own subtitles, in your language if it has them; timing starts at 0.
@@ -243,127 +255,196 @@ export function Player({
   const onTracksMenu = useCallback((open: boolean) => setMenus((m) => ({ ...m, tracks: open })), []);
   const shown = active || !running || menus.react || menus.tracks;
 
-  // Keep subtitles clear of the controls: above them while they show, low when they fade.
-  useEffect(() => {
-    const place = () => {
-      const h = frameRef.current?.clientHeight ?? 0;
-      if (!h) return;
-      const reserve = shown ? (compact ? 92 : 112) : compact ? 12 : 28;
-      subsRef.current?.setLine(Math.max(50, 100 - (reserve / h) * 100));
-    };
-    place();
-    window.addEventListener("resize", place);
-    return () => window.removeEventListener("resize", place);
-  }, [shown, compact]);
+  // Touch: a tap on the film shows or hides the controls. Mouse: a click plays or pauses.
+  const onFilmClick = () => {
+    if (layout === "wide") toggle();
+    else if (shown && running) setActive(false);
+    else wake();
+  };
+
+  const waitingSpinner = !ps.needsTap && ps.waiting && running;
+  const downloading = preparing && progress ? <DownloadBadge progress={progress} /> : null;
+  const tracks = hasTracks ? (
+    <TracksMenu
+      subtitles={media.subtitles ?? []}
+      addonSubs={media.catalog_id ? (addonSubs === "idle" ? null : addonSubs) : null}
+      loadAddonSubs={media.catalog_id ? loadAddonSubs : undefined}
+      subtitleKey={sub?.key ?? null}
+      onSubtitle={chooseSubtitle}
+      offset={subOffset}
+      onOffset={setSubOffset}
+      audio={media.audio ?? []}
+      audioIndex={audioIndex}
+      onAudio={chooseAudio}
+      quality={quality}
+      dataSaver={dataSaver}
+      onDataSaver={chooseDataSaver}
+      onOpenChange={onTracksMenu}
+    />
+  ) : null;
+  const fullscreenButton = (
+    <ControlButton label={fullscreen ? "Exit full screen" : "Full screen"} onClick={toggleFullscreen}>
+      {fullscreen ? <CornersInIcon size={20} /> : <CornersOutIcon size={20} />}
+    </ControlButton>
+  );
+  const scrubber = (
+    <Scrubber
+      time={ps.currentTime}
+      duration={duration}
+      bufferedEnd={ps.bufferedEnd}
+      preparedTo={preparing ? preparedTo : undefined}
+      onSeek={seek}
+      onScrub={wake}
+    />
+  );
+  const chrome = `transition-[opacity,transform] duration-300 ease-out-strong ${shown ? "opacity-100" : "pointer-events-none opacity-0"}`;
 
   return (
     <div
       ref={frameRef}
-      onPointerMove={wake}
-      onPointerDown={wake}
-      className={`relative size-full overflow-hidden bg-black ${shown ? "" : "cursor-none"}`}
+      onPointerMove={(e) => e.pointerType === "mouse" && wake()}
+      onPointerDown={(e) => (e.pointerType === "mouse" || e.target !== videoRef.current) && wake()}
+      className={`@container relative size-full overflow-hidden bg-black ${shown ? "" : "cursor-none"}`}
     >
       <video
         ref={videoRef}
         playsInline
         preload="auto"
         className="absolute inset-0 size-full object-contain"
-        onClick={() => !compact && toggle()}
-        onDoubleClick={toggleFullscreen}
+        onClick={onFilmClick}
+        onDoubleClick={() => layout === "wide" && toggleFullscreen()}
       />
 
-      {/* Top and bottom scrims so glass controls stay legible over bright scenes. */}
+      {/* Scrims so the controls stay legible over bright scenes. */}
       <div
-        className={`pointer-events-none absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-black/70 to-transparent transition-opacity duration-300 ${shown ? "opacity-100" : "opacity-0"}`}
+        className={`pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent ${chrome} ${layout === "phone" ? "h-24" : "h-36"}`}
       />
+      {layout === "video" && (
+        <div className={`pointer-events-none absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-black/70 to-transparent ${chrome}`} />
+      )}
 
-      <StatusChip view={view} conn={conn} className={compact ? "top-[calc(60px+env(safe-area-inset-top))]" : "top-20"} />
+      <SubtitleLayer cues={cues} bottom={RESERVE[layout][1]} lift={shown ? RESERVE[layout][0] - RESERVE[layout][1] : 0} />
 
-      {!ps.needsTap && ps.waiting && running && (
+      <StatusChip view={view} conn={conn} className={layout === "video" ? "top-16" : layout === "phone" ? "top-3" : "top-4"} />
+
+      {waitingSpinner && layout !== "phone" && (
         <div className="pointer-events-none absolute inset-0 grid place-items-center">
           <Spinner size={36} className="text-fog-100/80" />
         </div>
       )}
 
-      <div
-        className={`absolute inset-x-0 bottom-0 transition-[opacity,transform] duration-300 ease-out-strong ${
-          shown ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-2 opacity-0"
-        } ${compact ? "p-2" : "p-4"}`}
-      >
-        <div className={`glass flex flex-col rounded-2xl ${compact ? "gap-1 px-2 pt-2 pb-1" : "gap-2 px-4 pt-3 pb-2"}`}>
-          <Scrubber
-            time={ps.currentTime}
-            duration={duration}
-            bufferedEnd={ps.bufferedEnd}
-            preparedTo={preparing ? preparedTo : undefined}
-            onSeek={seek}
-            onScrub={wake}
-          />
-          <div className="flex items-center gap-1">
-            <IconButton label={wantPlaying ? "Pause" : "Play"} onClick={toggle}>
-              {wantPlaying ? <PauseIcon size={22} weight="fill" /> : <PlayIcon size={22} weight="fill" />}
-            </IconButton>
-            {!compact && (
-              <IconButton label={ps.muted ? "Unmute" : "Mute"} onClick={() => sync.toggleMute()}>
-                {ps.muted || ps.volume === 0 ? <SpeakerSlashIcon size={21} /> : <SpeakerHighIcon size={21} />}
-              </IconButton>
+      {layout === "wide" && (
+        <div className={`absolute inset-x-5 bottom-5 ${chrome} ${shown ? "translate-y-0" : "translate-y-2"}`}>
+          <div className="glass flex h-14 items-center gap-1 rounded-full pr-2 pl-1.5">
+            <PlayCircle playing={wantPlaying} onClick={toggle} />
+            <div className="mx-2 min-w-0 flex-1">{scrubber}</div>
+            {fullscreen && (
+              <span className="mr-1 font-mono text-[12px] text-fog-300 tabular-nums">
+                {fmt(ps.currentTime)} <span className="text-fog-600">/ {fmt(duration)}</span>
+              </span>
             )}
-            <span className="ml-1 font-mono text-[12px] text-fog-300 tabular-nums">
-              {fmt(ps.currentTime)} <span className="text-fog-600">/ {fmt(duration)}</span>
-            </span>
-            {preparing && progress && <DownloadBadge progress={progress} />}
-            <span className="ml-3 min-w-0 flex-1 truncate text-[13px] font-medium text-fog-300 max-sm:hidden">{media.title}</span>
-            <span className="flex-1 sm:hidden" />
-            <ReactionButton onReact={(k) => conn.react(k)} onOpenChange={onReactMenu} />
-            {hasTracks && (
-              <TracksMenu
-                subtitles={media.subtitles ?? []}
-                addonSubs={media.catalog_id ? (addonSubs === "idle" ? null : addonSubs) : null}
-                loadAddonSubs={media.catalog_id ? loadAddonSubs : undefined}
-                subtitleKey={sub?.key ?? null}
-                onSubtitle={chooseSubtitle}
-                offset={subOffset}
-                onOffset={setSubOffset}
-                audio={media.audio ?? []}
-                audioIndex={audioIndex}
-                onAudio={chooseAudio}
-                quality={quality}
-                dataSaver={dataSaver}
-                onDataSaver={chooseDataSaver}
-                onOpenChange={onTracksMenu}
-              />
-            )}
-            {isHost && (
+            {downloading}
+            <ControlButton label={ps.muted ? "Unmute" : "Mute"} onClick={() => sync.toggleMute()}>
+              {ps.muted || ps.volume === 0 ? <SpeakerSlashIcon size={20} /> : <SpeakerHighIcon size={20} />}
+            </ControlButton>
+            {tracks}
+            {fullscreen && <ReactionButton onReact={(k) => conn.react(k)} onOpenChange={onReactMenu} />}
+            {isHost ? (
               <>
-                {!compact && <IconButton
+                <ControlButton
                   label={view.locked ? "Unlock controls for everyone" : "Only I can control playback"}
                   onClick={() => conn.lockControls(!view.locked)}
                   active={view.locked}
                 >
-                  {view.locked ? <LockSimpleIcon size={20} weight="fill" /> : <LockSimpleOpenIcon size={20} />}
-                </IconButton>}
-                <IconButton label="Change film" onClick={onChangeFilm}>
-                  <FilmStripIcon size={20} />
-                </IconButton>
+                  {view.locked ? <LockSimpleIcon size={19} weight="fill" /> : <LockSimpleOpenIcon size={19} />}
+                </ControlButton>
+                <ControlButton label="Change film" onClick={onChangeFilm}>
+                  <FilmReelIcon size={20} />
+                </ControlButton>
               </>
+            ) : (
+              view.locked && (
+                <span className="grid size-10 place-items-center text-fog-500" title="The host has locked the controls">
+                  <LockSimpleIcon size={17} weight="fill" />
+                </span>
+              )
             )}
-            {!isHost && view.locked && (
-              <span className="flex items-center gap-1 px-2 text-[12px] text-fog-500" title="The host has locked the controls">
-                <LockSimpleIcon size={14} weight="fill" /> Host only
-              </span>
-            )}
-            <IconButton label={fullscreen ? "Exit full screen" : "Full screen"} onClick={toggleFullscreen}>
-              {fullscreen ? <CornersInIcon size={20} /> : <CornersOutIcon size={20} />}
-            </IconButton>
+            {fullscreenButton}
           </div>
         </div>
-      </div>
+      )}
 
-      <ReactionLayer reactions={view.reactions} />
+      {layout === "phone" && (
+        <>
+          <div className={`pointer-events-none absolute inset-0 grid place-items-center ${waitingSpinner ? "" : chrome}`}>
+            <button
+              onClick={toggle}
+              aria-label={wantPlaying ? "Pause" : "Play"}
+              className={`glass press grid size-14 place-items-center rounded-full text-fog-50 ${shown ? "pointer-events-auto" : ""}`}
+            >
+              {waitingSpinner ? (
+                <Spinner size={24} />
+              ) : wantPlaying ? (
+                <PauseIcon size={24} weight="fill" />
+              ) : (
+                <PlayIcon size={24} weight="fill" className="translate-x-px" />
+              )}
+            </button>
+          </div>
+          <div className={`absolute inset-x-0 bottom-0 flex items-center gap-1.5 pr-1 pb-1 pl-3.5 ${chrome}`}>
+            <span className="font-mono text-[12px] text-fog-100 tabular-nums">{fmt(ps.currentTime)}</span>
+            <div className="mx-1.5 min-w-0 flex-1">{scrubber}</div>
+            {downloading}
+            {tracks}
+            {fullscreenButton}
+          </div>
+        </>
+      )}
+
+      {layout === "video" && (
+        <>
+          <div className={`absolute top-3 left-[max(12px,env(safe-area-inset-left))] flex items-center gap-3 ${chrome}`}>
+            <button
+              onClick={toggleFullscreen}
+              aria-label={fullscreen ? "Exit full screen" : "Full screen"}
+              className="glass press grid size-10 place-items-center rounded-full text-fog-50"
+            >
+              {fullscreen ? <CornersInIcon size={18} /> : <CornersOutIcon size={18} />}
+            </button>
+            <span className="max-w-[40vw] truncate text-[14px] font-semibold text-fog-50 [text-shadow:0_1px_8px_rgb(0_0_0/0.6)]">{media.title}</span>
+          </div>
+          <div className="pointer-events-none absolute top-3 right-[max(12px,env(safe-area-inset-right))] flex flex-col items-end gap-3">
+            {top?.(shown)}
+          </div>
+          <div
+            className={`absolute right-[max(16px,env(safe-area-inset-right))] bottom-3 left-[max(16px,env(safe-area-inset-left))] ${chrome} ${shown ? "translate-y-0" : "translate-y-2"}`}
+          >
+            <div className="glass flex h-14 items-center gap-1 rounded-full pr-1.5 pl-1.5">
+              <PlayCircle playing={wantPlaying} onClick={toggle} />
+              <span className="ml-1.5 font-mono text-[12px] text-fog-100 tabular-nums">{fmt(ps.currentTime)}</span>
+              <div className="mx-2 min-w-0 flex-1">{scrubber}</div>
+              {downloading}
+              {bar?.(onReactMenu)}
+              {tracks}
+              {isHost && (
+                <ControlButton label="Change film" onClick={onChangeFilm}>
+                  <FilmReelIcon size={20} />
+                </ControlButton>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
+      <ReactionLayer reactions={view.reactions} bottom={layout === "phone" ? 48 : 96} />
 
       <Toast view={view} />
 
-      <div className={`pointer-events-none absolute inset-x-0 z-30 flex justify-center px-3 ${compact ? "top-[calc(60px+env(safe-area-inset-top))]" : "bottom-28"}`}>
+      <div
+        className={`pointer-events-none absolute inset-x-0 z-30 flex justify-center px-3 ${
+          layout === "phone" ? "top-3" : layout === "video" ? "bottom-20" : "bottom-24"
+        }`}
+      >
         <AnimatePresence mode="wait">
           {view.stillThere ? (
             <StillThereCard
@@ -389,10 +470,10 @@ export function Player({
         <div className="absolute inset-0 z-20 grid place-items-center bg-ink-950/70 backdrop-blur-md">
           <div className="enter flex max-w-[34ch] flex-col items-center gap-3 px-6 text-center">
             <p className="text-lg font-semibold tracking-[-0.02em] text-fog-50">{loadError}</p>
-            <p className="text-[14px] text-fog-300">The rest of the room keeps watching. Try again in a moment.</p>
+            {!compact && <p className="text-[14px] text-fog-300">The rest of the room keeps watching. Try again in a moment.</p>}
             <button
               onClick={() => setAttempt((n) => n + 1)}
-              className="glass press mt-1 flex h-11 items-center gap-2 rounded-xl px-4 text-[15px] font-semibold text-fog-50"
+              className="press mt-1 flex h-11 items-center gap-2 rounded-full bg-ink-700 px-5 text-[15px] font-semibold text-fog-50 hover:bg-ink-600"
             >
               <ArrowClockwiseIcon size={18} weight="bold" /> Try again
             </button>
@@ -422,14 +503,14 @@ export function Player({
                 {isHost && (
                   <button
                     onClick={onSwitch && conn.targetPosition() > 5 ? onSwitch : onChangeFilm}
-                    className="glass press mt-1 flex h-11 items-center gap-2 rounded-xl px-4 text-[15px] font-semibold text-fog-50"
+                    className="press mt-1 flex h-11 items-center gap-2 rounded-full bg-plum-700 px-5 text-[15px] font-semibold text-fog-50"
                   >
-                    <FilmStripIcon size={18} /> Pick another
+                    <FilmReelIcon size={18} /> Pick another
                   </button>
                 )}
               </div>
             ) : (
-              <PreparingCard title={media.title} progress={progress} compact={compact} resumeAt={resumeAt} />
+              <PreparingCard title={media.title} progress={progress} compact={layout === "phone"} resumeAt={resumeAt} />
             )}
           </motion.div>
         )}
@@ -445,17 +526,9 @@ export function Player({
             onClick={() => sync.rejoin()}
             className="absolute inset-0 z-20 grid place-items-center bg-ink-950/60 backdrop-blur-md"
           >
-            <span className="flex flex-col items-center gap-4 px-6 text-center">
-              <span className="press grid size-20 place-items-center rounded-full bg-ember-500 text-ink-950 shadow-[0_12px_40px_-8px_rgb(232_131_74/0.7)] max-sm:size-16">
-                <PlayIcon size={32} weight="fill" className="translate-x-0.5" />
-              </span>
-              <span className="flex flex-col gap-1">
-                <span className="text-lg font-semibold tracking-[-0.02em] text-fog-50">Rejoin</span>
-                <span className="text-[14px] text-fog-300">
-                  The room is at <RoomClock conn={conn} /> {running ? "and still watching" : "and paused"}
-                </span>
-              </span>
-            </span>
+            <BigPlay title="Rejoin" compact={layout === "phone"}>
+              The room is at <RoomClock conn={conn} /> {running ? "and still watching" : "and paused"}
+            </BigPlay>
           </motion.button>
         )}
         {canAttach && ps.needsTap && !view.gate && (
@@ -467,19 +540,80 @@ export function Player({
             onClick={() => sync.unlock()}
             className="absolute inset-0 z-20 grid place-items-center bg-ink-950/55 backdrop-blur-md"
           >
-            <span className="flex flex-col items-center gap-4 px-6 text-center">
-              <span className="press grid size-20 place-items-center rounded-full bg-ember-500 text-ink-950 shadow-[0_12px_40px_-8px_rgb(232_131_74/0.7)] max-sm:size-16">
-                <PlayIcon size={32} weight="fill" className="translate-x-0.5" />
-              </span>
-              <span className="flex flex-col gap-1">
-                <span className="text-lg font-semibold tracking-[-0.02em] text-fog-50">Join the screening</span>
-                <span className="text-[14px] text-fog-300">{media.title}</span>
-              </span>
-            </span>
+            <BigPlay title="Join the screening" compact={layout === "phone"}>
+              {media.title}
+            </BigPlay>
           </motion.button>
         )}
       </AnimatePresence>
     </div>
+  );
+}
+
+// How far above the frame's bottom subtitles sit: clear of the controls while they show,
+// low once they fade.
+const RESERVE: Record<PlayerLayout, [number, number]> = { wide: [96, 28], phone: [44, 10], video: [84, 20] };
+
+/**
+ * The subtitles, drawn by us rather than the browser: always clear of the control bar, sliding
+ * up with it as it appears and back down as it fades. Under the controls in stacking order,
+ * so on a small phone stage the centre play button covers a long line, not the reverse. Sized to the player, not the
+ * window. The cue's own markup (italics, bold) comes from the browser's VTT parser, which
+ * only ever produces text and a few inline elements.
+ */
+const SubtitleLayer = memo(function SubtitleLayer({ cues, bottom, lift }: { cues: VTTCue[]; bottom: number; lift: number }) {
+  if (cues.length === 0) return null;
+  return (
+    <div
+      className="pointer-events-none absolute inset-x-0 flex flex-col items-center gap-1 px-[6%] text-center transition-transform duration-300 ease-out-strong motion-reduce:transition-none"
+      style={{ bottom, transform: `translateY(${-lift}px)` }}
+    >
+      {cues.map((c, i) => (
+        <CueText key={`${c.startTime}-${i}`} cue={c} />
+      ))}
+    </div>
+  );
+});
+
+function CueText({ cue }: { cue: VTTCue }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    ref.current?.replaceChildren(cue.getCueAsHTML());
+  }, [cue]);
+  return (
+    <span
+      ref={ref}
+      className="rounded-[8px] bg-ink-950/62 px-[0.55em] py-[0.12em] text-[clamp(13px,2.5cqw,34px)] leading-[1.45] font-medium whitespace-pre-line text-fog-50 [box-decoration-break:clone] [-webkit-box-decoration-break:clone]"
+    />
+  );
+}
+
+function PlayCircle({ playing, onClick }: { playing: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      aria-label={playing ? "Pause" : "Play"}
+      title={playing ? "Pause (space)" : "Play (space)"}
+      className="press grid size-11 shrink-0 place-items-center rounded-full bg-fog-50 text-ink-950 hover:bg-white"
+    >
+      {playing ? <PauseIcon size={20} weight="fill" /> : <PlayIcon size={20} weight="fill" className="translate-x-px" />}
+    </button>
+  );
+}
+
+function BigPlay({ title, compact, children }: { title: string; compact?: boolean; children: React.ReactNode }) {
+  return (
+    <span className={`flex flex-col items-center px-6 text-center ${compact ? "gap-2.5" : "gap-4"}`}>
+      <span
+        className={`press grid place-items-center rounded-full bg-plum-700 text-fog-50 shadow-[0_16px_48px_-12px_rgb(112_41_99/0.8)] ${compact ? "size-14" : "size-20"}`}
+      >
+        <PlayIcon size={compact ? 24 : 32} weight="fill" className="translate-x-0.5" />
+      </span>
+      <span className="flex flex-col gap-1">
+        <span className={`font-semibold tracking-[-0.02em] text-fog-50 ${compact ? "text-[16px]" : "text-lg"}`}>{title}</span>
+        <span className={`text-fog-300 ${compact ? "text-[13px]" : "text-[14px]"}`}>{children}</span>
+      </span>
+    </span>
   );
 }
 
@@ -506,7 +640,7 @@ function StatusChip({ view, conn, className = "" }: { view: RoomView; conn: Room
     key = "starting";
     content = (
       <>
-        <Spinner size={14} className="text-ember-400" /> Starting
+        <Spinner size={14} className="text-plum-200" /> Starting
       </>
     );
   } else if (want === "playing" && buffering.length > 0) {
@@ -514,13 +648,13 @@ function StatusChip({ view, conn, className = "" }: { view: RoomView; conn: Room
     key = `wait-${first.user_id}`;
     content = (
       <>
-        <Spinner size={14} className="text-ember-400" />
+        <Spinner size={14} className="text-plum-200" />
         Waiting for {first.user_id === view.me ? "you" : first.username}
         {buffering.length > 1 && ` and ${buffering.length - 1} more`}
         {isHost && first.user_id !== view.me && (
           <button
             onClick={() => conn.skipWait(first.user_id)}
-            className="press -my-1 ml-1 rounded-full bg-white/10 px-2.5 py-1 text-[12px] font-semibold text-fog-50 hover:bg-white/15"
+            className="press -my-1 ml-1 rounded-full bg-plum-700 px-2.5 py-1 text-[12px] font-semibold text-fog-50"
           >
             Don&rsquo;t wait
           </button>
@@ -531,7 +665,7 @@ function StatusChip({ view, conn, className = "" }: { view: RoomView; conn: Room
     key = "ready";
     content = (
       <>
-        <Spinner size={14} className="text-ember-400" /> Getting everyone ready
+        <Spinner size={14} className="text-plum-200" /> Getting everyone ready
       </>
     );
   } else if (switched && (!view.locked || isHost)) {
@@ -576,7 +710,7 @@ function StatusChip({ view, conn, className = "" }: { view: RoomView; conn: Room
             exit={{ opacity: 0, y: -6, filter: "blur(4px)", transition: { duration: 0.12 } }}
             transition={{ type: "spring", bounce: 0, duration: 0.3 }}
             role="status"
-            className="glass pointer-events-auto flex h-9 items-center gap-2 rounded-full px-4 text-[13px] font-medium text-fog-50"
+            className="glass pointer-events-auto flex h-9 items-center gap-2 rounded-full px-4 text-[13px] font-medium whitespace-nowrap text-fog-50"
           >
             {content}
           </motion.div>
@@ -597,7 +731,7 @@ function Toast({ view }: { view: RoomView }) {
             animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
             exit={{ opacity: 0, scale: 0.97, transition: { duration: 0.15 } }}
             transition={{ type: "spring", bounce: 0, duration: 0.3 }}
-            className="glass-thick rounded-2xl px-5 py-3 text-[15px] font-semibold text-fog-50"
+            className="glass-thick rounded-full px-5 py-3 text-[15px] font-semibold text-fog-50"
           >
             {view.toast.text}
           </motion.div>
@@ -668,19 +802,17 @@ function Scrubber({
         setDrag(null);
       }}
       onPointerCancel={() => setDrag(null)}
-      className="group relative flex h-6 cursor-pointer touch-none items-center"
+      className="group relative flex h-8 cursor-pointer touch-none items-center"
     >
-      <div
-        className={`relative h-1 w-full overflow-hidden rounded-full bg-white/15 transition-[height] duration-150 group-hover:h-1.5 ${drag !== null ? "h-1.5" : ""}`}
-      >
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-white/12">
         {preparedTo !== undefined && duration > 0 && (
           <div
             className="absolute inset-y-0 left-0 bg-[repeating-linear-gradient(90deg,rgb(255_255_255/0.14)_0_3px,transparent_3px_6px)]"
             style={{ width: `${Math.min(100, (preparedTo / duration) * 100)}%` }}
           />
         )}
-        <div className="absolute inset-y-0 left-0 bg-white/25" style={{ width: `${bufPct}%` }} />
-        <div className="absolute inset-y-0 left-0 bg-ember-500" style={{ width: `${pct}%` }} />
+        <div className="absolute inset-y-0 left-0 rounded-full bg-fog-600" style={{ width: `${bufPct}%` }} />
+        <div className="absolute inset-y-0 left-0 rounded-full bg-plum-400" style={{ width: `${pct}%` }} />
       </div>
       <div
         className={`absolute size-3.5 -translate-x-1/2 rounded-full bg-fog-50 shadow-[0_2px_8px_rgb(0_0_0/0.4)] transition-transform duration-150 ${
@@ -690,7 +822,7 @@ function Scrubber({
       />
       {drag !== null && (
         <div
-          className="glass absolute bottom-6 -translate-x-1/2 rounded-lg px-2 py-1 font-mono text-[12px] text-fog-50 tabular-nums"
+          className="glass absolute bottom-7 -translate-x-1/2 rounded-full px-2.5 py-1 font-mono text-[12px] text-fog-50 tabular-nums"
           style={{ left: `${pct}%` }}
         >
           {fmt(drag)}
@@ -720,12 +852,12 @@ function PreparingCard({
       ? Math.min(100, (progress.downloaded / progress.size_bytes) * 100)
       : 0;
   return (
-    <div className={`enter relative flex w-full max-w-[380px] flex-col items-center gap-4 px-6 text-center ${compact ? "gap-2 pt-10" : ""}`}>
-      <span className={`grid place-items-center rounded-2xl bg-ember-500/12 text-ember-400 ring-1 ring-ember-500/20 ${compact ? "size-10" : "size-14"}`}>
-        <CloudArrowDownIcon size={compact ? 20 : 28} weight="duotone" />
+    <div className={`enter relative flex w-full max-w-[380px] flex-col items-center px-6 text-center ${compact ? "gap-2" : "gap-4"}`}>
+      <span className={`grid place-items-center rounded-full bg-ink-800 text-plum-200 ${compact ? "size-11" : "size-20"}`}>
+        <CloudArrowDownIcon size={compact ? 22 : 36} weight="duotone" />
       </span>
       <div className="flex flex-col gap-1">
-        <p className={`font-semibold tracking-[-0.02em] text-fog-50 ${compact ? "text-[16px]" : "text-xl"}`}>
+        <p className={`font-semibold tracking-[-0.02em] text-fog-50 ${compact ? "text-[16px]" : "text-2xl"}`}>
           {catchingUp ? `Catching up to ${fmt(resumeAt)}` : `Getting ${title} ready`}
         </p>
         <p className="text-[13px] text-fog-300">
@@ -736,8 +868,8 @@ function PreparingCard({
             : `From ${progress.peers} ${progress.peers === 1 ? "peer" : "peers"} · ${formatSpeed(progress.speed)}`}
         </p>
       </div>
-      <div className="h-1 w-full max-w-[260px] overflow-hidden rounded-full bg-white/10" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}>
-        <div className="h-full rounded-full bg-ember-500 transition-[width] duration-700 ease-out" style={{ width: `${Math.max(2, pct)}%` }} />
+      <div className="h-1.5 w-full max-w-[260px] overflow-hidden rounded-full bg-white/10" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}>
+        <div className="h-full rounded-full bg-plum-400 transition-[width] duration-700 ease-out" style={{ width: `${Math.max(2, pct)}%` }} />
       </div>
       {!compact && (
         <p className="text-[12px] text-fog-600">
@@ -757,8 +889,8 @@ function DownloadBadge({ progress }: { progress: import("@/lib/api").Progress })
       ? Math.round((progress.downloaded / progress.size_bytes) * 100)
       : 0;
   return (
-    <span className="ml-3 inline-flex items-center gap-1.5 rounded-full bg-white/8 px-2.5 py-1 text-[12px] font-medium text-fog-300 tabular-nums" title="Still downloading; you can only skip as far as it's got">
-      <CloudArrowDownIcon size={14} className="text-ember-400" />
+    <span className="mr-1 inline-flex shrink-0 items-center gap-1.5 rounded-full bg-white/8 px-2.5 py-1 text-[12px] font-medium text-fog-300 tabular-nums" title="Still downloading; you can only skip as far as it's got">
+      <CloudArrowDownIcon size={14} className="text-plum-200" />
       {pct}%{!progress.direct && <span className="max-sm:hidden"> · {formatSpeed(progress.speed)}</span>}
     </span>
   );
@@ -767,29 +899,6 @@ function DownloadBadge({ progress }: { progress: import("@/lib/api").Progress })
 function formatSpeed(bytesPerSec: number) {
   const mb = bytesPerSec / 1e6;
   return mb >= 1 ? `${mb.toFixed(1)} MB/s` : `${Math.round(bytesPerSec / 1e3)} KB/s`;
-}
-
-function IconButton({
-  label,
-  onClick,
-  active,
-  children,
-}: {
-  label: string;
-  onClick: () => void;
-  active?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      aria-label={label}
-      title={label}
-      className={`press grid size-10 shrink-0 place-items-center rounded-xl hover:bg-white/10 ${active ? "text-ember-400" : "text-fog-100"}`}
-    >
-      {children}
-    </button>
-  );
 }
 
 function nameOf(view: RoomView, id: number | null) {
@@ -801,7 +910,7 @@ function fmt(s: number) {
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   const sec = Math.floor(s % 60);
-  return h ? `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}` : `${m}:${String(sec).padStart(2, "0")}`;
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}` : `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
 }
 
 /** The room's position, ticking once a second. */
@@ -836,7 +945,7 @@ function StillThereCard({ askedAt, ended, title, onHere }: { askedAt: number; en
       {...cardMotion}
       role="alertdialog"
       aria-label={ended ? "End of the film" : "Still watching?"}
-      className="glass-thick pointer-events-auto flex w-full max-w-[400px] items-center gap-4 rounded-2xl p-4"
+      className="glass-thick pointer-events-auto flex w-full max-w-[420px] items-center gap-4 rounded-[28px] py-3.5 pr-3.5 pl-5"
     >
       <div className="min-w-0 flex-1">
         <p className="text-[15px] font-semibold tracking-[-0.01em] text-fog-50">
@@ -850,7 +959,7 @@ function StillThereCard({ askedAt, ended, title, onHere }: { askedAt: number; en
       <button
         onClick={onHere}
         autoFocus
-        className="press h-10 shrink-0 rounded-xl bg-ember-500 px-4 text-[14px] font-semibold text-ink-950 hover:bg-ember-400"
+        className="press h-11 shrink-0 rounded-full bg-plum-700 px-5 text-[15px] font-semibold text-fog-50"
       >
         I&rsquo;m here
       </button>
@@ -873,9 +982,9 @@ function BehindCard({
     <motion.div
       {...cardMotion}
       role="status"
-      className="glass-thick pointer-events-auto flex w-full max-w-[440px] items-start gap-3 rounded-2xl p-4"
+      className="glass-thick pointer-events-auto flex w-full max-w-[440px] items-start gap-3 rounded-[28px] p-5"
     >
-      <CloudSlashIcon size={22} className="mt-0.5 shrink-0 text-ember-400" />
+      <CloudSlashIcon size={22} className="mt-0.5 shrink-0 text-away" />
       <div className="min-w-0 flex-1">
         <p className="text-[15px] font-semibold tracking-[-0.01em] text-fog-50">The download can&rsquo;t keep up</p>
         <p className="mt-0.5 text-[13px] leading-snug text-fog-300">
@@ -890,12 +999,12 @@ function BehindCard({
           {onSwitch && (
             <button
               onClick={onSwitch}
-              className="press flex h-9 items-center gap-1.5 rounded-xl bg-ember-500 px-3.5 text-[14px] font-semibold text-ink-950 hover:bg-ember-400"
+              className="press flex h-10 items-center gap-1.5 rounded-full bg-plum-700 px-4 text-[14px] font-semibold text-fog-50"
             >
               <ArrowsClockwiseIcon size={16} weight="bold" /> Switch release
             </button>
           )}
-          <button onClick={onDismiss} className="press h-9 rounded-xl bg-white/10 px-3.5 text-[14px] font-semibold text-fog-100 hover:bg-white/15">
+          <button onClick={onDismiss} className="press h-10 rounded-full bg-white/10 px-4 text-[14px] font-semibold text-fog-100 hover:bg-white/15">
             {host === null ? "Keep waiting" : "OK"}
           </button>
         </div>

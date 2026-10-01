@@ -136,3 +136,21 @@ func (r *Room) react(userID int64, s Sender, in protocol.ReactionSend) {
 	r.active(mem)
 	r.broadcastExcept(s, protocol.TypeReaction, protocol.Reaction{By: mem.user, Kind: in.Kind})
 }
+
+// typing tells everyone else that userID's composer has text in it, or doesn't any more.
+// Repeats closer than typingEvery are dropped, so a chatty client can't flood the room.
+func (r *Room) typing(userID int64, s Sender, in protocol.TypingSend) {
+	mem, ok := r.members[userID]
+	if !ok || (!in.Active && !mem.typing) {
+		return
+	}
+	now := time.Now()
+	if in.Active && mem.typing && now.Sub(mem.typingAt) < typingEvery {
+		return
+	}
+	mem.typing, mem.typingAt = in.Active, now
+	if in.Active {
+		r.active(mem)
+	}
+	r.broadcastExcept(s, protocol.TypeTyping, protocol.Typing{By: mem.user, Active: in.Active})
+}

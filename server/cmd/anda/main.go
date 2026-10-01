@@ -95,7 +95,7 @@ func run(log *slog.Logger) error {
 
 	mux := http.NewServeMux()
 	authSvc.Register(mux)
-	(&rooms.Handlers{Manager: roomMgr, Users: db, Authenticate: authSvc.UserFromRequest, Log: log}).Register(mux)
+	(&rooms.Handlers{Manager: roomMgr, Users: db, Authenticate: authSvc.UserFromRequest, AllowPreview: authSvc.AllowPreview, Log: log}).Register(mux)
 	gw.Register(mux)
 	films.Register(mux)
 	lib.Register(mux)

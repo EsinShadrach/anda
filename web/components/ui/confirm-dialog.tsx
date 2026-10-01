@@ -45,7 +45,7 @@ function Confirm({ title, body, action, busy, error, onConfirm, onCancel }: Prop
         animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
         exit={{ opacity: 0, scale: 0.97, filter: "blur(4px)", transition: { duration: 0.15 } }}
         transition={{ type: "spring", bounce: 0, duration: 0.35 }}
-        className="glass-thick flex w-full max-w-[400px] flex-col gap-5 rounded-[28px] p-7"
+        className="glass-thick flex w-full max-w-[400px] flex-col gap-5 rounded-[32px] p-7"
       >
         <div className="flex flex-col gap-2">
           <h2 id="confirm-title" className="text-xl font-semibold tracking-[-0.02em] text-fog-50">

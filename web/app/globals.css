@@ -1,7 +1,8 @@
 @import "tailwindcss";
 
-/* Screening room: warm near-black, one ember accent, glass chrome over the stage. */
+/* Living room: warm near-black, one plum accent, big soft radii, glass over the film. */
 @theme {
+  --color-ink-975: #070605;
   --color-ink-950: #0b0a09;
   --color-ink-900: #11100e;
   --color-ink-850: #171513;
@@ -15,10 +16,12 @@
   --color-fog-500: #948e83;
   --color-fog-600: #6f6a61;
 
-  --color-ember-300: #f6b88e;
-  --color-ember-400: #ee9a63;
-  --color-ember-500: #e8834a;
-  --color-ember-600: #cf6d36;
+  /* The accent: fills (700), rings and focus (600), progress and own seat (400), text (200). */
+  --color-plum-200: #e7b9dc;
+  --color-plum-400: #c27ab4;
+  --color-plum-600: #9c4a8c;
+  --color-plum-700: #702963;
+  --color-plum-800: #5e2253;
 
   --color-live: #63cf8e;
   --color-away: #e6b54c;
@@ -34,6 +37,20 @@
   --animate-shimmer: shimmer 1.4s ease-in-out infinite;
   --animate-shake: shake 360ms var(--ease-out-strong);
   --animate-caret: caret 1.1s step-end infinite;
+  --animate-typing-dot: typing-dot 1.2s ease-in-out infinite;
+
+  @keyframes typing-dot {
+    0%,
+    60%,
+    100% {
+      transform: translateY(0);
+      opacity: 0.35;
+    }
+    30% {
+      transform: translateY(-3px);
+      opacity: 1;
+    }
+  }
 
   @keyframes caret {
     50% {
@@ -76,7 +93,7 @@
   }
 
   html {
-    background: var(--color-ink-950);
+    background: var(--color-ink-900);
     color: var(--color-fog-100);
     -webkit-tap-highlight-color: transparent;
     -webkit-text-size-adjust: 100%;
@@ -114,12 +131,12 @@
   }
 
   :focus-visible {
-    outline: 2px solid var(--color-ember-400);
+    outline: 2px solid var(--color-plum-600);
     outline-offset: 2px;
   }
 
   ::selection {
-    background: color-mix(in oklab, var(--color-ember-500) 40%, transparent);
+    background: color-mix(in oklab, var(--color-plum-600) 55%, transparent);
   }
 }
 
@@ -155,6 +172,22 @@
   }
 }
 
+/* The room's light: a plum glow from the top left, like a lamp across the sofa. */
+@utility room-bg {
+  background: radial-gradient(ellipse 900px 600px at 12% 0%, #24141f 0%, var(--color-ink-900) 60%);
+}
+
+@utility lobby-bg {
+  background: radial-gradient(ellipse 900px 700px at 12% 0%, #2e1729 0%, var(--color-ink-900) 62%);
+}
+
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
 @utility skeleton {
   background: linear-gradient(
     90deg,
@@ -183,7 +216,8 @@
       transform: none;
     }
   }
-  .skeleton {
+  .skeleton,
+  .animate-typing-dot {
     animation: none;
   }
 }
@@ -205,11 +239,51 @@
   }
 }
 
-/* Subtitles (lib/subtitles.ts): legible over any scene, in the room's type. */
+/* Subtitles in the iPhone's own full-screen player (elsewhere the player draws them itself). */
 video::cue {
   font-family: var(--font-sans);
   font-size: clamp(15px, 2.4vw, 28px);
   line-height: 1.3;
   color: #f7f4ee;
   background: rgb(10 9 8 / 0.62);
+}
+
+/* The living room (components/living-room.tsx): the lamp clicks on, friends sit down, the
+   TV comes up, and now and then a heart drifts off the couch. */
+@keyframes anda-flicker {
+  0% { opacity: 0; }
+  8% { opacity: 0.8; }
+  12% { opacity: 0.1; }
+  20% { opacity: 0.9; }
+  25% { opacity: 0.25; }
+  36%, 100% { opacity: 1; }
+}
+
+@keyframes anda-rise {
+  from { transform: translateY(120px); }
+  to { transform: translateY(0); }
+}
+
+@keyframes anda-glow {
+  0% { opacity: 0; }
+  10% { opacity: 0.6; }
+  15% { opacity: 0.15; }
+  32%, 100% { opacity: 1; }
+}
+
+@keyframes anda-shimmer {
+  from { opacity: 0; }
+  to { opacity: 0.75; }
+}
+
+@keyframes anda-float {
+  0% { opacity: 0; transform: translateY(0) scale(0.6); }
+  6% { opacity: 1; transform: translateY(-20px) scale(1); }
+  34%, 100% { opacity: 0; transform: translateY(-190px) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-anim] {
+    animation: none !important;
+  }
 }

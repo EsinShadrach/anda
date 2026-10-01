@@ -35,6 +35,7 @@ const (
 	TypeLockControls = "lock_controls"
 	TypeStillHere    = "still_here"
 	TypeReactionSend = "reaction_send"
+	TypeTypingSend   = "typing_send"
 	TypeHostTransfer = "host_transfer"
 )
 
@@ -55,6 +56,7 @@ const (
 	TypeTimePong       = "time_pong"
 	TypeStillThere     = "still_there"
 	TypeReaction       = "reaction"
+	TypeTyping         = "typing"
 )
 
 type Hello struct {
@@ -218,6 +220,18 @@ type ReactionSend struct {
 type Reaction struct {
 	By   User   `json:"by"`
 	Kind string `json:"kind"`
+}
+
+// Typing: the composer has text in it (Active, repeated every few seconds while it does) or
+// it's been cleared. Relayed to everyone else; clients let it lapse after a few seconds
+// without a repeat, so a closed tab never leaves someone "typing" for good.
+type TypingSend struct {
+	Active bool `json:"active"`
+}
+
+type Typing struct {
+	By     User `json:"by"`
+	Active bool `json:"active"`
 }
 
 // Reactions is the fixed palette; anything else is refused.

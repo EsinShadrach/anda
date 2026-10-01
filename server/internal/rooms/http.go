@@ -16,12 +16,14 @@ type Handlers struct {
 	Manager      *Manager
 	Users        store.Users
 	Authenticate func(*http.Request) (store.User, error)
+	AllowPreview func(*http.Request) bool // rate limit for signed-out invite previews
 	Log          *slog.Logger
 }
 
 func (h *Handlers) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/rooms", h.create)
 	mux.HandleFunc("GET /api/rooms/{code}", h.info)
+	mux.HandleFunc("GET /api/invites/{code}", h.invite)
 	mux.HandleFunc("DELETE /api/rooms/{code}", h.end)
 	mux.HandleFunc("GET /api/me/rooms", h.visited)
 	mux.HandleFunc("DELETE /api/me/rooms/{code}", h.forget)
@@ -48,6 +50,38 @@ func (h *Handlers) create(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusCreated, map[string]any{"room": roomJSON{Code: room.Code, Owner: u.Username}})
 }
 
+type inviteJSON struct {
+	Code   string   `json:"code"`
+	Owner  string   `json:"owner,omitempty"`
+	Online int      `json:"online"`
+	Here   []string `json:"here,omitempty"` // who's in it now (a few names)
+}
+
+// invite is what an invite link shows before signing in: whose room, and who's on the couch.
+// Holding the code is the invitation; the per-IP limit keeps codes from being guessed.
+func (h *Handlers) invite(w http.ResponseWriter, r *http.Request) {
+	if h.AllowPreview != nil && !h.AllowPreview(r) {
+		httpx.Error(w, http.StatusTooManyRequests, "rate_limited", "Too many lookups. Try again later.")
+		return
+	}
+	room, err := h.Manager.Lookup(r.Context(), r.PathValue("code"))
+	if errors.Is(err, ErrNotFound) {
+		httpx.Error(w, http.StatusNotFound, "room_not_found", "No room with that code.")
+		return
+	}
+	if err != nil {
+		h.Log.Error("lookup room", "err", err)
+		httpx.Error(w, http.StatusInternalServerError, "internal", "Something went wrong.")
+		return
+	}
+	out := inviteJSON{Code: room.Code}
+	out.Online, out.Here = h.Manager.Presence(room.Code)
+	if owner, err := h.Users.UserByID(r.Context(), room.OwnerID); err == nil {
+		out.Owner = owner.Username
+	}
+	httpx.JSON(w, http.StatusOK, out)
+}
+
 func (h *Handlers) info(w http.ResponseWriter, r *http.Request) {
 	if _, err := h.Authenticate(r); err != nil {
 		httpx.Error(w, http.StatusUnauthorized, "not_signed_in", "Not signed in.")
@@ -71,13 +105,15 @@ func (h *Handlers) info(w http.ResponseWriter, r *http.Request) {
 }
 
 type visitJSON struct {
-	Code         string `json:"code"`
-	Owner        string `json:"owner"`
-	Mine         bool   `json:"mine"` // the viewer owns it, so they can end it
-	Online       int    `json:"online"`
-	Film         string `json:"film,omitempty"`
-	CreatedAt    int64  `json:"created_at"`     // unix ms
-	LastJoinedAt int64  `json:"last_joined_at"` // unix ms
+	Code         string   `json:"code"`
+	Owner        string   `json:"owner"`
+	Mine         bool     `json:"mine"` // the viewer owns it, so they can end it
+	Online       int      `json:"online"`
+	Here         []string `json:"here,omitempty"` // who's in it now (a few names)
+	Film         string   `json:"film,omitempty"` // on screen, or where it left off
+	Poster       string   `json:"poster,omitempty"`
+	CreatedAt    int64    `json:"created_at"`     // unix ms
+	LastJoinedAt int64    `json:"last_joined_at"` // unix ms
 }
 
 func (h *Handlers) visited(w http.ResponseWriter, r *http.Request) {
@@ -95,7 +131,7 @@ func (h *Handlers) visited(w http.ResponseWriter, r *http.Request) {
 	out := make([]visitJSON, len(visits))
 	for i, v := range visits {
 		out[i] = visitJSON{
-			Code: v.Code, Owner: v.OwnerName, Mine: v.OwnerID == u.ID, Online: v.Online, Film: v.Film,
+			Code: v.Code, Owner: v.OwnerName, Mine: v.OwnerID == u.ID, Online: v.Online, Here: v.Here, Film: v.Film, Poster: v.Poster,
 			CreatedAt: v.CreatedAt.UnixMilli(), LastJoinedAt: v.LastJoinedAt.UnixMilli(),
 		}
 	}

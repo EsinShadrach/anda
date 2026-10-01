@@ -202,10 +202,12 @@ func (s *SQLite) RecordVisit(ctx context.Context, roomID, userID int64, at time.
 
 func (s *SQLite) VisitedRooms(ctx context.Context, userID int64, limit int) ([]VisitedRoom, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT r.id, r.code, r.owner_id, r.created_at, r.last_active_at, u.username, m.last_joined_at
+		SELECT r.id, r.code, r.owner_id, r.created_at, r.last_active_at, u.username, m.last_joined_at,
+			COALESCE(f.title, ''), COALESCE(f.poster, '')
 		FROM room_members m
 		JOIN rooms r ON r.id = m.room_id
 		JOIN users u ON u.id = r.owner_id
+		LEFT JOIN media f ON f.id = r.media_id
 		WHERE m.user_id = ?
 		ORDER BY m.last_joined_at DESC, r.id DESC LIMIT ?`, userID, limit)
 	if err != nil {
@@ -216,7 +218,7 @@ func (s *SQLite) VisitedRooms(ctx context.Context, userID int64, limit int) ([]V
 	for rows.Next() {
 		var v VisitedRoom
 		var created, active, joined int64
-		if err := rows.Scan(&v.ID, &v.Code, &v.OwnerID, &created, &active, &v.OwnerName, &joined); err != nil {
+		if err := rows.Scan(&v.ID, &v.Code, &v.OwnerID, &created, &active, &v.OwnerName, &joined, &v.FilmTitle, &v.FilmPoster); err != nil {
 			return nil, err
 		}
 		v.CreatedAt = time.Unix(created, 0)

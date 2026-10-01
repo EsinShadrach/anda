@@ -5,7 +5,6 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { api, cleanCode } from "@/lib/api";
 import { RoomView } from "@/components/room/room-view";
 import { RoomGone } from "@/components/room/room-gone";
-import { Projector } from "@/components/projector";
 
 export default function RoomPage() {
   return (
@@ -34,5 +33,5 @@ function RoomGate() {
 }
 
 function Entering() {
-  return <Projector variant="stage" className="fixed inset-0" />;
+  return <div className="room-bg fixed inset-0" />;
 }
