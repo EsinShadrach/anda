@@ -244,7 +244,7 @@ export function TracksMenu({
         <SubtitlesIcon size={21} weight={subtitleKey ? "fill" : "regular"} />
       </ControlButton>
       <Popover anchor={ref.current} open={open} onClose={() => setOpen(false)} label="Subtitles and audio" className="w-[280px]">
-        <div className="flex max-h-[min(440px,70dvh)] flex-col overflow-y-auto overscroll-contain">
+        <div className="flex max-h-[440px] min-h-0 flex-col overflow-y-auto overscroll-contain">
           <MenuTitle>Subtitles</MenuTitle>
           <MenuItem checked={subtitleKey === null} onClick={() => onSubtitle(null, "off")}>
             Off

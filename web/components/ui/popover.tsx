@@ -59,20 +59,29 @@ function Panel({
   label?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ left: number; top: number; side: Placement; originX: number } | null>(null);
+  const [pos, setPos] = useState<{ left: number; top: number; side: Placement; originX: number; maxHeight: number } | null>(
+    null,
+  );
 
   useLayoutEffect(() => {
     const a = anchor.getBoundingClientRect();
     const el = ref.current!;
     const w = el.offsetWidth;
     const h = el.offsetHeight;
+    // The preferred side, unless it's too short and the other side has more room. Either
+    // way the menu is capped to the room it has and scrolls inside (a long subtitle list
+    // under a phone's film).
+    const above = a.top - GAP - MARGIN;
+    const below = innerHeight - a.bottom - GAP - MARGIN;
     let side = placement;
-    if (side === "top" && a.top - GAP - h < MARGIN) side = "bottom";
-    else if (side === "bottom" && a.bottom + GAP + h > innerHeight - MARGIN) side = "top";
+    if (side === "top" && h > above && below > above) side = "bottom";
+    else if (side === "bottom" && h > below && above > below) side = "top";
+    const maxHeight = Math.max(120, side === "top" ? above : below);
+    const height = Math.min(h, maxHeight);
     const centre = a.left + a.width / 2;
     const left = Math.min(Math.max(MARGIN, centre - w / 2), innerWidth - w - MARGIN);
-    const top = side === "top" ? a.top - GAP - h : a.bottom + GAP;
-    setPos({ left, top, side, originX: centre - left });
+    const top = side === "top" ? a.top - GAP - height : a.bottom + GAP;
+    setPos({ left, top, side, originX: centre - left, maxHeight });
   }, [anchor, placement]);
 
   useEffect(() => {
@@ -81,16 +90,22 @@ function Panel({
       if (!ref.current?.contains(t) && !anchor.contains(t)) onClose();
     };
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    const onMove = () => onClose();
+    const onResize = () => onClose();
+    // Close when the anchor moves (the page, or a row it sits in, scrolled), not when
+    // something unrelated scrolls: the menu's own list, or chat following a new message.
+    const onScroll = (e: Event) => {
+      const t = e.target;
+      if (t === document || (t instanceof Node && t.contains(anchor))) onClose();
+    };
     document.addEventListener("pointerdown", onDown);
     document.addEventListener("keydown", onKey);
-    window.addEventListener("resize", onMove);
-    window.addEventListener("scroll", onMove, true);
+    window.addEventListener("resize", onResize);
+    window.addEventListener("scroll", onScroll, true);
     return () => {
       document.removeEventListener("pointerdown", onDown);
       document.removeEventListener("keydown", onKey);
-      window.removeEventListener("resize", onMove);
-      window.removeEventListener("scroll", onMove, true);
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("scroll", onScroll, true);
     };
   }, [anchor, onClose]);
 
@@ -108,9 +123,10 @@ function Panel({
         position: "fixed",
         left: pos?.left ?? -9999,
         top: pos?.top ?? -9999,
+        maxHeight: pos?.maxHeight,
         transformOrigin: `${pos?.originX ?? 0}px ${pos?.side === "bottom" ? "0%" : "100%"}`,
       }}
-      className={`glass-thick z-[60] rounded-[24px] p-2 ${className}`}
+      className={`glass-thick z-[60] flex flex-col rounded-[24px] p-2 ${className}`}
     >
       {children}
     </motion.div>
