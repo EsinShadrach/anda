@@ -1,0 +1,23 @@
+# Anda's data on its own disk: the 20 GB volume attached to the VM (vdb, mounted at /mnt/anda
+# through /etc/fstab). The VM opts in with COMPOSE_FILE=docker-compose.yml:deploy/disk.yml in
+# ~/anda/.env; without it the named volumes in docker-compose.yml are used.
+# create_host_path: false makes a container refuse to start when the disk isn't mounted,
+# rather than starting on an empty directory with a fresh database.
+services:
+  anda-api:
+    environment:
+      ANDA_CACHE_GB: "12"   # leaves room for Stremio's cache and a download stored twice
+    volumes:
+      - type: bind
+        source: /mnt/anda/data
+        target: /data
+        bind:
+          create_host_path: false
+
+  torrent:
+    volumes:
+      - type: bind
+        source: /mnt/anda/torrent
+        target: /root/.stremio-server
+        bind:
+          create_host_path: false

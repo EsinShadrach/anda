@@ -27,7 +27,7 @@ services:
       ANDA_LIVEKIT_KEY: ${LIVEKIT_KEY:-}
       ANDA_LIVEKIT_SECRET: ${LIVEKIT_SECRET:-}
     volumes:
-      - data:/data                 # SQLite file, films (/data/media) and their HLS (/data/hls)
+      - data:/data                 # SQLite file, films (/data/media) and their HLS (/data/hls); on the VM, deploy/disk.yml puts these on their own disk
     networks:
       default: {}                  # to reach the torrent engine
       edge:

@@ -35,9 +35,9 @@ Don't edit `pulse/` from here. The one file Anda needs to change outside itself 
 One shared VM, no domain:
 
 - **Host:** `ubuntu@102.211.122.78`, SSH key `~/Downloads/test-macbook-air.pem`. Apache CloudStack KVM, Ubuntu 24.04 (the VM was rebuilt from scratch on 2026-09-30: Docker was reinstalled from Docker's apt repo, and all data, including `~/anda/.env`, started over).
-- **Size:** 1 vCPU, 961 MB RAM, 2 GB swap file, 20 GB disk (~15 GB free).
+- **Size:** 1 vCPU, 961 MB RAM, 2 GB swap file, 20 GB system disk (~18.3 GB usable; Ubuntu ~2.4 GB, swap 2 GB, Docker images ~2.8 GB), plus a 20 GB data volume for Anda (added 2026-10-02, shared storage, `vdb`, ext4 with no reserved blocks, mounted at `/mnt/anda` by UUID in `/etc/fstab` with `nofail`).
 - **Tooling on the VM:** Docker 29 + Compose v5. No Go, Node or build tools, so build inside Docker images.
-- **Moving soon:** the user plans to move everything to a new VM (IP not known yet). Keep the host in one place (`HOST=` in `deploy.sh`) so the move is a one-line change.
+- **Moving soon:** the user plans to move everything to a new VM (IP not known yet). Keep the host in one place (`HOST=` in `deploy.sh`) so the move is a one-line change. The data volume can be detached and attached to the new VM (it's shared storage), then mounted at `/mnt/anda` again.
 
 ### Routing
 
@@ -69,7 +69,7 @@ New routes (e.g. `/ws` for step 2) go in the `anda.{$SUFFIX}` block of `proxy/Ca
   - `rsync -az --delete`, excluding `.git`, `node_modules`, `.next`, `.env` and local `*.db` files (the built artifacts are synced on purpose).
   - Create `edge` if missing: `docker network inspect edge >/dev/null 2>&1 || docker network create edge`.
   - Then `docker compose up -d --build`.
-- **Data:** the SQLite file lives in the `anda_data` volume at `/data/anda.db`.
+- **Data:** `/data` (SQLite at `/data/anda.db`, films in `/data/hls`) and Stremio's cache live on the data volume, bind-mounted from `/mnt/anda/data` and `/mnt/anda/torrent` by `deploy/disk.yml`, which also raises `ANDA_CACHE_GB` to 12. The VM opts in with `COMPOSE_FILE=docker-compose.yml:deploy/disk.yml` in `~/anda/.env`; without that (e.g. a fresh VM) the `data`/`torrent` named volumes are used. The binds use `create_host_path: false`, so if the volume isn't mounted, `anda-api` and `torrent` refuse to start instead of starting on an empty database.
 - **Secrets:** none yet (session tokens are random and stored hashed). When one is needed, generate it on the VM into `~/anda/.env` on the first deploy, and never sync or commit it (Pulse does this with `openssl rand`).
 - **Deploying:** it touches a shared, live machine. Confirm with the user before running `deploy.sh` or changing the proxy.
 
