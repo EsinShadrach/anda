@@ -113,3 +113,7 @@ Anda comes with one source: the Blender Foundation's open films (*Sintel*, *Big 
 ## Credits
 
 The screenshots show the [*Sintel*](https://durian.blender.org) trailer, © Blender Foundation, licensed under [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/).
+
+## License
+
+[MIT](LICENSE). The screenshots' film is Blender's, under its own CC BY 3.0 license (see Credits).
