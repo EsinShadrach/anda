@@ -56,6 +56,9 @@ type Manager struct {
 	AnswerWithin time.Duration
 	// TickEvery is how often rooms check for the end of the film and idle members.
 	TickEvery time.Duration
+	// OnParty, if set, hears when a watch party starts or ends. It runs on the room's
+	// goroutine, so it must not block.
+	OnParty func(PartyEvent)
 
 	mu   sync.Mutex
 	live map[string]*Room

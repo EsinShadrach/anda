@@ -68,6 +68,7 @@ func (r *Room) tick(now time.Time) {
 	if changed {
 		r.pauseIfAllAway()
 	}
+	r.updateParty(now)
 }
 
 // ask sends "Still watching?" to a connected member who isn't already being asked.

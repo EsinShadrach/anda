@@ -15,6 +15,7 @@ Watch films with friends, at the same moment, from anywhere. Start a room, send 
 - **Audio and subtitles.** Every audio track and text subtitle is kept. Each viewer chooses their own language and subtitles, and can nudge the subtitle timing.
 - **Fast starts on slow connections.** Heavy films also get a 480p version. The player starts on it and climbs to full quality as the connection allows.
 - **Made for phones too.** Portrait shows the film, the couch and the chat. Turn the phone on its side and the film fills the screen, with the chat in a drawer.
+- **Party emails, if you want them.** Get an email when friends start watching together, and another when they're done.
 - **Little touches.** "Still watching?" after hours of idling. Playback pauses when everyone has stepped away, and rooms remember their film and position.
 
 ## Screenshots
@@ -86,6 +87,9 @@ The API reads its settings from environment variables:
 | `ANDA_LIVEKIT_URL`, `_KEY`, `_SECRET` | none | LiveKit for voice and camera. A relative URL like `/livekit` is completed with the page's host |
 | `ANDA_LOW_RUNG` | on | `off` stops making the background 480p versions |
 | `ANDA_IDLE_AFTER` | `3h` | How long before "Still watching?" appears (e.g. `40s` for testing) |
+| `ANDA_NOTIFY_EMAIL` | none | Send an email here when a watch party starts (two people together for a minute) and when it ends: who came, what they watched, how far they got |
+| `ANDA_SMTP_PASSWORD` | none | Password for sending those emails. For Gmail, an [app password](https://myaccount.google.com/apppasswords). Emails stay off until it's set |
+| `ANDA_SMTP_ADDR`, `ANDA_SMTP_USER` | `smtp.gmail.com:587`, the notify address | Another provider's SMTP server and login |
 
 ## Deploying
 

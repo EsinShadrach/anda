@@ -18,6 +18,7 @@ import (
 	"anda/internal/gateway"
 	"anda/internal/library"
 	"anda/internal/media"
+	"anda/internal/notify"
 	"anda/internal/rooms"
 	"anda/internal/site"
 	"anda/internal/store"
@@ -76,6 +77,31 @@ func run(log *slog.Logger) error {
 	}
 	films.InUse = roomMgr.MediaInUse
 	go films.Run(ctx)
+
+	// Watch parties go to the log, and by email to ANDA_NOTIFY_EMAIL when SMTP is set up
+	// (Gmail by default: the login is that address, the password an app password).
+	var mailer *notify.Mailer
+	if to, pass := os.Getenv("ANDA_NOTIFY_EMAIL"), os.Getenv("ANDA_SMTP_PASSWORD"); to != "" && pass != "" {
+		mailer = notify.New(env("ANDA_SMTP_ADDR", "smtp.gmail.com:587"), env("ANDA_SMTP_USER", to), pass, to, log)
+		go mailer.Run(ctx)
+		go func() {
+			cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			if err := mailer.Check(cctx); err != nil {
+				log.Error("party emails: SMTP login failed", "addr", mailer.Addr, "user", mailer.User, "err", err)
+				return
+			}
+			log.Info("party emails on", "to", to, "smtp", mailer.Addr)
+		}()
+	} else if os.Getenv("ANDA_NOTIFY_EMAIL") != "" {
+		log.Info("party emails off: ANDA_SMTP_PASSWORD isn't set", "to", os.Getenv("ANDA_NOTIFY_EMAIL"))
+	}
+	roomMgr.OnParty = func(ev rooms.PartyEvent) {
+		log.Info("watch party", "room", ev.Room, "started", ev.Started, "people", ev.People, "films", ev.Films)
+		if mailer != nil {
+			mailer.Party(ev)
+		}
+	}
 
 	lib := &library.Service{
 		Catalog:      env("ANDA_CATALOG_ADDON", "https://v3-cinemeta.strem.io"),

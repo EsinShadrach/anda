@@ -26,6 +26,12 @@ services:
       ANDA_LIVEKIT_URL: /livekit
       ANDA_LIVEKIT_KEY: ${LIVEKIT_KEY:-}
       ANDA_LIVEKIT_SECRET: ${LIVEKIT_SECRET:-}
+      # Watch-party emails, set in ~/anda/.env: off unless both are set. Gmail by default
+      # (ANDA_SMTP_PASSWORD is an app password); ANDA_SMTP_ADDR/USER for another provider.
+      ANDA_NOTIFY_EMAIL: ${ANDA_NOTIFY_EMAIL:-}
+      ANDA_SMTP_PASSWORD: ${ANDA_SMTP_PASSWORD:-}
+      ANDA_SMTP_ADDR: ${ANDA_SMTP_ADDR:-}
+      ANDA_SMTP_USER: ${ANDA_SMTP_USER:-}
     volumes:
       - data:/data                 # SQLite file, films (/data/media) and their HLS (/data/hls); on the VM, deploy/disk.yml puts these on their own disk
     networks:

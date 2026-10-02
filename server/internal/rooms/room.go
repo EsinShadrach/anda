@@ -82,6 +82,7 @@ type Room struct {
 	savedAt    time.Time
 	pb         playback
 	ended      bool // the owner ended it; the goroutine exits after this event
+	party      party
 }
 
 func newRoom(m *Manager, info store.Room, history []store.ChatMessage) *Room {
@@ -178,6 +179,7 @@ func (r *Room) join(u protocol.User, s Sender) {
 		}
 		r.broadcastExcept(s, protocol.TypeMemberUpdate, protocol.MemberUpdate{UserID: u.ID, Username: u.Username, Status: mem.status})
 		r.touch()
+		r.updateParty(now)
 	}
 	s.Send(protocol.Encode(protocol.TypeRoomState, r.snapshot()))
 }
@@ -233,13 +235,39 @@ func (r *Room) leave(userID int64) {
 		}
 	}
 	r.pauseIfAllAway()
+	r.updateParty(time.Now())
 }
 
 // end tells everyone the room is over and empties it. The room is already deleted.
 func (r *Room) end(by protocol.User) {
 	r.broadcast(protocol.TypeRoomEnded, protocol.RoomEnded{By: by})
 	clear(r.members)
+	r.updateParty(time.Now())
 	r.ended = true
+}
+
+// updateParty passes a watch party starting or ending on to the Manager's OnParty.
+func (r *Room) updateParty(now time.Time) {
+	if r.m.OnParty == nil {
+		return
+	}
+	here := make([]*member, 0, len(r.members))
+	for _, m := range r.members {
+		here = append(here, m)
+	}
+	slices.SortFunc(here, func(a, b *member) int { return cmp.Compare(a.joinedAt, b.joinedAt) })
+	names := make([]string, len(here))
+	for i, m := range here {
+		names[i] = m.user.Username
+	}
+	var pos float64
+	if r.pb.media != nil {
+		pos = r.pb.position(now)
+	}
+	if ev, ok := r.party.update(now, names, r.pb.media, pos); ok {
+		ev.Room = r.info.Code
+		r.m.OnParty(ev)
+	}
 }
 
 func (r *Room) sendChat(userID int64, s Sender, in protocol.ChatSend) {
