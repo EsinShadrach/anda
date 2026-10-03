@@ -133,7 +133,7 @@ func (s *Service) makeRung(ctx context.Context, id int64) error {
 		"-threads", threads, // decoding the HD source is about a third of the work
 		"-i", src,
 		"-map", "0:v:0", "-an",
-		"-vf", fmt.Sprintf("scale=-2:%d", rungHeight),
+		"-filter_threads", threads, "-vf", fmt.Sprintf("scale=-2:%d", rungHeight),
 		"-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-profile:v", "high", "-pix_fmt", "yuv420p",
 		"-maxrate", fmt.Sprintf("%dk", rungMaxrate), "-bufsize", fmt.Sprintf("%dk", rungMaxrate*2),
 		"-g", "100000", "-keyint_min", "100000", "-sc_threshold", "0",
