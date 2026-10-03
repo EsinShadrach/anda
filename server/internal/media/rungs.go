@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -122,16 +123,21 @@ func (s *Service) makeRung(ctx context.Context, id int64) error {
 	}
 	defer os.RemoveAll(tmp)
 
+	// Every core, at the lowest priority (nice 19): anything else that wants the CPU (sync,
+	// voice, a remux, Pulse) gets it first; otherwise the copy is ready about twice as fast
+	// on two cores as on one. ANDA_LOW_RUNG=off still turns it off for benchmark runs.
+	threads := strconv.Itoa(min(runtime.NumCPU(), 4))
 	keys := rungKeyframes(segs)
 	args := []string{
 		"-hide_banner", "-loglevel", "error", "-nostdin",
+		"-threads", threads, // decoding the HD source is about a third of the work
 		"-i", src,
 		"-map", "0:v:0", "-an",
 		"-vf", fmt.Sprintf("scale=-2:%d", rungHeight),
 		"-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-profile:v", "high", "-pix_fmt", "yuv420p",
 		"-maxrate", fmt.Sprintf("%dk", rungMaxrate), "-bufsize", fmt.Sprintf("%dk", rungMaxrate*2),
 		"-g", "100000", "-keyint_min", "100000", "-sc_threshold", "0",
-		"-threads", "1",
+		"-threads", threads,
 	}
 	if len(keys) > 0 {
 		args = append(args, "-force_key_frames", strings.Join(keys, ","))
@@ -146,7 +152,7 @@ func (s *Service) makeRung(ctx context.Context, id int64) error {
 	if nice, err := exec.LookPath("nice"); err == nil {
 		name, args = nice, append([]string{"-n", "19", "ffmpeg"}, args...)
 	}
-	// ~3x real time on the VM; give it plenty, and stop with the service.
+	// ~3x real time on one core, more on two; give it plenty, and stop with the service.
 	ectx, cancel := context.WithTimeout(ctx, time.Duration(total)*time.Second+30*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ectx, name, args...)
