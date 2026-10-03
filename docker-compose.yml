@@ -13,7 +13,7 @@ services:
     environment:
       ANDA_SECURE_COOKIE: "true"   # served over HTTPS via Caddy
       ANDA_TRUST_PROXY: "true"     # client IP from X-Forwarded-For, set by Caddy
-      GOMEMLIMIT: 64MiB            # Go heap; leaves room for ffmpeg remuxes (~30 MB each)
+      GOMEMLIMIT: 256MiB           # Go heap; leaves room for ffmpeg remuxes and the 480p encode
       ANDA_TORRENT_URL: http://torrent:11470
       ANDA_CACHE_GB: "8"           # finished Library films; least recently watched evicted past this
       # Extra Stremio stream addons (comma-separated base URLs), set in ~/anda/.env on the VM.
@@ -38,7 +38,8 @@ services:
       default: {}                  # to reach the torrent engine
       edge:
         aliases: [anda-api]
-    mem_limit: 128m
+    # 2 vCPU / 4 GB since 2026-10-03: room for a remux plus the low-quality encode at once.
+    mem_limit: 512m
 
   # Stremio's streaming server: downloads torrents on demand and serves files as seekable
   # HTTP streams to the API's ffmpeg. Internal only (default network, no ports).
@@ -46,10 +47,10 @@ services:
     image: stremio/server:latest
     restart: unless-stopped
     environment:
-      NODE_OPTIONS: --max-old-space-size=160   # Node 14 doesn't size its heap to the container
+      NODE_OPTIONS: --max-old-space-size=512   # Node 14 doesn't size its heap to the container
     volumes:
       - torrent:/root/.stremio-server          # its own bounded cache (2 GB) and settings
-    mem_limit: 256m
+    mem_limit: 768m
     # Downloading is bulk work: under CPU contention it yields to voice (livekit: 2048).
     cpu_shares: 512
 
@@ -61,7 +62,7 @@ services:
     command: ["--config", "/etc/livekit.yaml", "--node-ip", "${LIVEKIT_NODE_IP:-127.0.0.1}"]
     environment:
       LIVEKIT_KEYS: "${LIVEKIT_KEY:-devkey}: ${LIVEKIT_SECRET:-}"
-      GOMEMLIMIT: 64MiB   # it idles around 50 MB; a few small rooms stay well under
+      GOMEMLIMIT: 192MiB  # it idles around 50 MB; room for several rooms on camera
     volumes:
       - ./deploy/livekit.yaml:/etc/livekit.yaml:ro
     ports:
@@ -71,8 +72,8 @@ services:
     networks:
       edge:
         aliases: [anda-livekit]
-    mem_limit: 96m
-    # Voice is real time: on the one vCPU it goes first when the torrent engine or an ffmpeg
+    mem_limit: 256m
+    # Voice is real time: it goes first when the torrent engine or an ffmpeg
     # remux is busy (default share is 1024). Only matters under contention.
     cpu_shares: 2048
 
