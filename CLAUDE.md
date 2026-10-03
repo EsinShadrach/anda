@@ -35,7 +35,7 @@ Don't edit `pulse/` from here. The one file Anda needs to change outside itself 
 One shared VM, no domain:
 
 - **Host:** `ubuntu@102.211.122.78`, SSH key `~/Downloads/test-macbook-air.pem`. Apache CloudStack KVM, Ubuntu 24.04 (the VM was rebuilt from scratch on 2026-09-30: Docker was reinstalled from Docker's apt repo, and all data, including `~/anda/.env`, started over).
-- **Size:** 1 vCPU, 961 MB RAM, 2 GB swap file, 20 GB system disk (~18.3 GB usable; Ubuntu ~2.4 GB, swap 2 GB, Docker images ~2.8 GB), plus a 20 GB data volume for Anda (added 2026-10-02, shared storage, `vdb`, ext4 with no reserved blocks, mounted at `/mnt/anda` by UUID in `/etc/fstab` with `nofail`).
+- **Size:** 2 vCPU, 4 GB RAM (3.8 GiB), 2 GB swap file, 80 GB system disk (grown by cloud-init on boot; ~70 GB free as of 2026-10-03). Resized from 1 vCPU / 961 MB / 20 GB on 2026-10-03 by moving to a bigger plan, plus a 20 GB data volume for Anda (added 2026-10-02, shared storage, `vdb`, ext4 with no reserved blocks, mounted at `/mnt/anda` by UUID in `/etc/fstab` with `nofail`).
 - **Tooling on the VM:** Docker 29 + Compose v5. No Go, Node or build tools, so build inside Docker images.
 - **Moving soon:** the user plans to move everything to a new VM (IP not known yet). Keep the host in one place (`HOST=` in `deploy.sh`) so the move is a one-line change. The data volume can be detached and attached to the new VM (it's shared storage), then mounted at `/mnt/anda` again.
 
@@ -75,13 +75,13 @@ New routes (e.g. `/ws` for step 2) go in the `anda.{$SUFFIX}` block of `proxy/Ca
 
 ## Resource budget
 
-Measured idle usage: Pulse db ~160 MB, Pulse api ~37 MB, Pulse nginx ~7 MB, Caddy ~35 MB. About 345 MB is available.
+Measured idle usage (on the old 961 MB VM): Pulse db ~160 MB, Pulse api ~37 MB, Pulse nginx ~7 MB, Caddy ~35 MB. Since the 2026-10-03 resize to 4 GB, ~3.1 GB is available with everything running, so the tight budget below is history: limits still matter, but there's room to raise Anda's if needed.
 
 Pulse's limits (db 420 MB, api 280 MB, nginx 64 MB) plus Caddy (64 MB) already add up to ~830 MB. They're sized for Pulse's load tests, and Pulse grows toward them under load. With no swap, overcommitting means the kernel OOM-kills something.
 
 - **Aim for Anda's total limits around 150 MB.** A Go API fits in 30–60 MB, and a static-file server in under 20 MB.
 - **A separate Postgres container is the expensive part** (~100 MB+ even when tuned small). Weigh SQLite, or a small tuned Postgres, and flag the trade-off to the user rather than picking silently.
-- **CPU:** there's one vCPU for everything, so keep background work (polling, cron, heavy image builds) light.
+- **CPU:** two vCPUs for everything (one until 2026-10-03), so keep background work (polling, cron, heavy image builds) light; the 480p rung encode still runs one film at a time at nice 19.
 
 ## Interplay with Pulse
 
