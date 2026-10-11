@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { FilmReelIcon, FilmSlateIcon, XIcon } from "@phosphor-icons/react";
-import { RoomConnection, type RoomView as View } from "@/lib/room";
+import { RoomConnection, forMe, type RoomView as View } from "@/lib/room";
 import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { VoiceSession, type VoiceState } from "@/lib/voice";
@@ -172,7 +172,10 @@ function Room({
   const [chatOpen, setChatOpen] = useState(false);
   const seen = useRef(view.chat.length);
   if (chatOpen || mode !== "video") seen.current = view.chat.length;
-  const unread = view.chat.slice(seen.current).filter((c) => c.kind === "msg" && c.senderId !== view.me).length;
+  const unreadItems = view.chat.slice(seen.current).filter((c) => c.kind === "msg" && c.senderId !== view.me);
+  const unread = unreadItems.length;
+  const myName = view.members.find((m) => m.user_id === view.me)?.username;
+  const mentioned = unreadItems.some((c) => forMe(c, view.me, myName));
 
   const top = useCallback(
     (shown: boolean) => (
@@ -185,14 +188,14 @@ function Room({
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -4, transition: { duration: 0.15 } }}
             >
-              <PresencePill view={view} vs={vs} unread={unread} onChat={() => setChatOpen(true)} />
+              <PresencePill view={view} vs={vs} unread={unread} mentioned={mentioned} onChat={() => setChatOpen(true)} />
             </motion.div>
           )}
         </AnimatePresence>
         <FilmTiles view={view} voice={voice} vs={vs} />
       </>
     ),
-    [view, vs, voice, unread],
+    [view, vs, voice, unread, mentioned],
   );
   const bar = useCallback(
     (onMenu: (open: boolean) => void) => (

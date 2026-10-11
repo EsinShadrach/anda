@@ -1,5 +1,5 @@
 // Room sounds, synthesised with Web Audio (nothing to download): someone joined, someone
-// left, a message, someone started typing. Soft, short and warm, pitched to sit under a
+// left, a message (a brighter one when it's for you), someone started typing. Soft, short and warm, pitched to sit under a
 // film's dialogue rather than over it. Others' actions only; never our own.
 //
 // Browsers only let audio start after a gesture, so the context is created on the first
@@ -40,6 +40,13 @@ const SOUNDS: Record<SoundKind, Note[]> = {
     { freq: 587.33, glideTo: 880, dur: 0.16, gain: 0.17 },
     { freq: 1760, at: 0.012, dur: 0.07, gain: 0.018 },
   ],
+  // The message pop, then a bright note above it: someone said your name, or answered you.
+  mention: [
+    { freq: 587.33, glideTo: 880, dur: 0.16, gain: 0.17 },
+    { freq: 1760, at: 0.012, dur: 0.07, gain: 0.018 },
+    { freq: 1318.5, at: 0.13, dur: 0.42, gain: 0.12 },
+    { freq: 2637, at: 0.13, dur: 0.2, gain: 0.015 },
+  ],
   // Two faint taps, barely there.
   typing: [
     { freq: 1661.2, dur: 0.035, gain: 0.025, type: "triangle" },
@@ -48,7 +55,7 @@ const SOUNDS: Record<SoundKind, Note[]> = {
 };
 
 // The same sound again sooner than this is dropped: a flurry of messages is one pop.
-const SPACING: Record<SoundKind, number> = { joined: 600, left: 600, message: 350, typing: 4000 };
+const SPACING: Record<SoundKind, number> = { joined: 600, left: 600, message: 350, mention: 350, typing: 4000 };
 
 class RoomSounds {
   private ctx: AudioContext | null = null;

@@ -82,6 +82,7 @@ type JoinRoom struct {
 type ChatSend struct {
 	Text        string `json:"text"`
 	ClientMsgID string `json:"client_msg_id"`
+	ReplyTo     int64  `json:"reply_to,omitempty"` // the message this answers, in the same room
 }
 
 type Member struct {
@@ -106,12 +107,24 @@ const (
 )
 
 type ChatMessage struct {
-	ID          int64  `json:"id"`
-	Sender      User   `json:"sender"`
-	Text        string `json:"text"`
-	Time        int64  `json:"time"` // unix ms
-	ClientMsgID string `json:"client_msg_id,omitempty"`
+	ID          int64      `json:"id"`
+	Sender      User       `json:"sender"`
+	Text        string     `json:"text"`
+	Time        int64      `json:"time"` // unix ms
+	ClientMsgID string     `json:"client_msg_id,omitempty"`
+	ReplyTo     *ChatQuote `json:"reply_to,omitempty"`
 }
+
+// ChatQuote is the message a reply answers, carried with it so the quote shows even when
+// the original is older than the history a client has.
+type ChatQuote struct {
+	ID     int64  `json:"id"`
+	Sender User   `json:"sender"`
+	Text   string `json:"text"` // the start of it (QuoteRunes)
+}
+
+// QuoteRunes is how much of the original a quote carries.
+const QuoteRunes = 160
 
 type User struct {
 	ID       int64  `json:"id"`

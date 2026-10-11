@@ -62,6 +62,10 @@ type ChatMessage struct {
 	Username  string
 	Text      string
 	CreatedAt time.Time
+	// ReplyTo is the message this one answers (0 if none); Reply is that message, when
+	// it's still there.
+	ReplyTo int64
+	Reply   *ChatMessage
 }
 
 type Rooms interface {
@@ -93,8 +97,10 @@ type VisitedRoom struct {
 
 type Chat interface {
 	AddChatMessage(ctx context.Context, m ChatMessage) (ChatMessage, error)
-	// RecentChatMessages returns up to limit messages, oldest first.
+	// RecentChatMessages returns up to limit messages, oldest first, with what they reply to.
 	RecentChatMessages(ctx context.Context, roomID int64, limit int) ([]ChatMessage, error)
+	// ChatMessageInRoom returns one message of roomID; ErrNotFound if it isn't one.
+	ChatMessageInRoom(ctx context.Context, roomID, id int64) (ChatMessage, error)
 }
 
 type Media struct {

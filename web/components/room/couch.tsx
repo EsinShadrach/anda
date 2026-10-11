@@ -370,11 +370,14 @@ export function PresencePill({
   view,
   vs,
   unread,
+  mentioned,
   onChat,
 }: {
   view: RoomView;
   vs: VoiceState;
   unread: number;
+  /** Something unread mentions us or answers us: the badge says @ instead of a count. */
+  mentioned?: boolean;
   onChat: () => void;
 }) {
   const seats = useSeats(view, vs).filter((s) => s.member.status === "online");
@@ -397,13 +400,13 @@ export function PresencePill({
       </span>
       <button
         onClick={onChat}
-        aria-label={unread ? `Chat, ${unread} new` : "Chat"}
+        aria-label={unread ? `Chat, ${unread} new${mentioned ? ", some for you" : ""}` : "Chat"}
         className="press relative grid size-9 place-items-center rounded-full text-fog-100 hover:bg-white/10"
       >
         <ChatCircleIcon size={19} weight="fill" />
         {unread > 0 && (
           <span className="absolute -top-0.5 -right-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-plum-700 px-1 text-[10px] font-bold text-fog-50 tabular-nums">
-            {unread > 9 ? "9+" : unread}
+            {mentioned ? "@" : unread > 9 ? "9+" : unread}
           </span>
         )}
       </button>

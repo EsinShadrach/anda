@@ -3,6 +3,7 @@ package rooms
 import (
 	"cmp"
 	"context"
+	"errors"
 	"slices"
 	"sort"
 	"strings"
@@ -294,8 +295,23 @@ func (r *Room) sendChat(userID int64, s Sender, in protocol.ChatSend) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	var reply *store.ChatMessage
+	if in.ReplyTo != 0 {
+		orig, err := r.m.chat.ChatMessageInRoom(ctx, r.info.ID, in.ReplyTo)
+		if errors.Is(err, store.ErrNotFound) {
+			s.Send(protocol.EncodeError(protocol.ErrBadMessage, "That message isn't here any more."))
+			return
+		}
+		if err != nil {
+			r.m.log.Error("find replied message", "room", r.info.Code, "err", err)
+			s.Send(protocol.EncodeError(protocol.ErrInternal, "Couldn't send that message."))
+			return
+		}
+		reply = &orig
+	}
 	saved, err := r.m.chat.AddChatMessage(ctx, store.ChatMessage{
 		RoomID: r.info.ID, UserID: userID, Username: mem.user.Username, Text: text, CreatedAt: now,
+		ReplyTo: in.ReplyTo, Reply: reply,
 	})
 	if err != nil {
 		r.m.log.Error("save chat message", "room", r.info.Code, "err", err)
@@ -390,13 +406,21 @@ func (r *Room) touch() {
 }
 
 func toProtoChat(c store.ChatMessage, clientMsgID string) protocol.ChatMessage {
-	return protocol.ChatMessage{
+	msg := protocol.ChatMessage{
 		ID:          c.ID,
 		Sender:      protocol.User{ID: c.UserID, Username: c.Username},
 		Text:        c.Text,
 		Time:        protocol.UnixMs(c.CreatedAt),
 		ClientMsgID: clientMsgID,
 	}
+	if p := c.Reply; p != nil {
+		text := p.Text
+		if r := []rune(text); len(r) > protocol.QuoteRunes {
+			text = string(r[:protocol.QuoteRunes])
+		}
+		msg.ReplyTo = &protocol.ChatQuote{ID: p.ID, Sender: protocol.User{ID: p.UserID, Username: p.Username}, Text: text}
+	}
+	return msg
 }
 
 func resumed(action string) string {

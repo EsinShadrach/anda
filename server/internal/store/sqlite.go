@@ -236,8 +236,8 @@ func (s *SQLite) ForgetVisit(ctx context.Context, roomID, userID int64) error {
 
 func (s *SQLite) AddChatMessage(ctx context.Context, m ChatMessage) (ChatMessage, error) {
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO chat_messages (room_id, user_id, text, created_at) VALUES (?, ?, ?, ?)`,
-		m.RoomID, m.UserID, m.Text, m.CreatedAt.UnixMilli())
+		`INSERT INTO chat_messages (room_id, user_id, text, created_at, reply_to) VALUES (?, ?, ?, ?, NULLIF(?, 0))`,
+		m.RoomID, m.UserID, m.Text, m.CreatedAt.UnixMilli(), m.ReplyTo)
 	if err != nil {
 		return ChatMessage{}, err
 	}
@@ -247,8 +247,11 @@ func (s *SQLite) AddChatMessage(ctx context.Context, m ChatMessage) (ChatMessage
 
 func (s *SQLite) RecentChatMessages(ctx context.Context, roomID int64, limit int) ([]ChatMessage, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT m.id, m.room_id, m.user_id, u.username, m.text, m.created_at
+		SELECT m.id, m.room_id, m.user_id, u.username, m.text, m.created_at,
+			COALESCE(p.id, 0), COALESCE(p.user_id, 0), COALESCE(pu.username, ''), COALESCE(p.text, ''), COALESCE(p.created_at, 0)
 		FROM chat_messages m JOIN users u ON u.id = m.user_id
+		LEFT JOIN chat_messages p ON p.id = m.reply_to AND p.room_id = m.room_id
+		LEFT JOIN users pu ON pu.id = p.user_id
 		WHERE m.room_id = ? ORDER BY m.id DESC LIMIT ?`, roomID, limit)
 	if err != nil {
 		return nil, err
@@ -257,11 +260,17 @@ func (s *SQLite) RecentChatMessages(ctx context.Context, roomID int64, limit int
 	var out []ChatMessage
 	for rows.Next() {
 		var m ChatMessage
-		var created int64
-		if err := rows.Scan(&m.ID, &m.RoomID, &m.UserID, &m.Username, &m.Text, &created); err != nil {
+		var p ChatMessage
+		var created, pCreated int64
+		if err := rows.Scan(&m.ID, &m.RoomID, &m.UserID, &m.Username, &m.Text, &created,
+			&p.ID, &p.UserID, &p.Username, &p.Text, &pCreated); err != nil {
 			return nil, err
 		}
 		m.CreatedAt = time.UnixMilli(created)
+		if p.ID != 0 {
+			p.RoomID, p.CreatedAt = m.RoomID, time.UnixMilli(pCreated)
+			m.ReplyTo, m.Reply = p.ID, &p
+		}
 		out = append(out, m)
 	}
 	if err := rows.Err(); err != nil {
@@ -271,6 +280,21 @@ func (s *SQLite) RecentChatMessages(ctx context.Context, roomID int64, limit int
 		out[i], out[j] = out[j], out[i]
 	}
 	return out, nil
+}
+
+func (s *SQLite) ChatMessageInRoom(ctx context.Context, roomID, id int64) (ChatMessage, error) {
+	var m ChatMessage
+	var created int64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT m.id, m.room_id, m.user_id, u.username, m.text, m.created_at
+		FROM chat_messages m JOIN users u ON u.id = m.user_id
+		WHERE m.room_id = ? AND m.id = ?`, roomID, id).
+		Scan(&m.ID, &m.RoomID, &m.UserID, &m.Username, &m.Text, &created)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ChatMessage{}, ErrNotFound
+	}
+	m.CreatedAt = time.UnixMilli(created)
+	return m, err
 }
 
 func (s *SQLite) UpsertLocalMedia(ctx context.Context, title, path string, size int64) (Media, error) {

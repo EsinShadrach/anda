@@ -7,16 +7,21 @@ export const PROTOCOL_VERSION = 1;
 export type Connection = "good" | "fair" | "poor";
 export type Member = { user_id: number; username: string; status: "online" | "away"; connection?: Connection };
 
+/** The message a reply answers, as quoted in it (the start of its text). */
+export type ChatQuote = { id: number; senderId: number; sender: string; text: string };
+
 export type ChatItem =
   | {
       kind: "msg";
       key: string;
+      id?: number; // the server's ID, once it has it (not while pending)
       senderId: number;
       sender: string;
       text: string;
       time: number;
       pending: boolean;
       live: boolean; // arrived while watching (animates in); history doesn't
+      reply?: ChatQuote;
     }
   | { kind: "system"; key: string; text: string; time: number; live: boolean };
 
@@ -44,7 +49,19 @@ export type ReactionKind = (typeof REACTIONS)[number];
 export type FloatingReaction = { id: number; kind: ReactionKind; by: string; self: boolean };
 
 /** Something someone else did that's worth a sound (lib/sounds.ts). */
-export type RoomEvent = { kind: "joined" | "left" | "message" | "typing"; userId: number };
+export type RoomEvent = { kind: "joined" | "left" | "message" | "mention" | "typing"; userId: number };
+
+/** @name in a message: usernames are 3 to 20 letters, numbers or underscores. */
+export const MENTION_RE = /@([A-Za-z0-9_]{3,20})(?![A-Za-z0-9_])/g;
+
+/** Whether a message is for me: it mentions me, or it answers something I said. */
+export function forMe(item: ChatItem, me: number | null, myName: string | undefined): boolean {
+  if (item.kind !== "msg" || me === null || item.senderId === me) return false;
+  if (item.reply?.senderId === me) return true;
+  if (!myName) return false;
+  const name = myName.toLowerCase();
+  return [...item.text.matchAll(MENTION_RE)].some((m) => m[1].toLowerCase() === name);
+}
 
 /** Someone else whose message box has text in it. */
 export type Typist = { id: number; name: string };
@@ -398,7 +415,8 @@ export class RoomConnection {
     this.open();
   }
 
-  sendChat(text: string) {
+  /** Sends a message, as a reply to replyTo when given. */
+  sendChat(text: string, replyTo?: ChatItem) {
     const trimmed = text.trim();
     if (!trimmed || this.view.status !== "open") return false;
     const clientId = `c${Date.now().toString(36)}${(this.nextClientId++).toString(36)}`;
@@ -416,10 +434,12 @@ export class RoomConnection {
           time: Date.now(),
           pending: true,
           live: true,
+          reply: quoteOf(replyTo),
         },
       ],
     });
-    this.send("chat_send", { text: trimmed, client_msg_id: clientId });
+    const reply = replyTo?.kind === "msg" ? replyTo.id : undefined;
+    this.send("chat_send", reply ? { text: trimmed, client_msg_id: clientId, reply_to: reply } : { text: trimmed, client_msg_id: clientId });
     return true;
   }
 
@@ -562,7 +582,8 @@ export class RoomConnection {
         }
         if (item.kind === "msg" && item.senderId !== this.view.me) {
           this.setTyping(item.senderId, item.sender, false);
-          this.emit({ kind: "message", userId: item.senderId });
+          const myName = this.view.members.find((m) => m.user_id === this.view.me)?.username;
+          this.emit({ kind: forMe(item, this.view.me, myName) ? "mention" : "message", userId: item.senderId });
         }
         break;
       }
@@ -675,16 +696,24 @@ function sys(text: string): ChatItem {
 }
 
 function toItem(m: any, live: boolean): ChatItem {
+  const r = m.reply_to;
   return {
     kind: "msg",
     key: `m${m.id}`,
+    id: m.id,
     senderId: m.sender.id,
     sender: m.sender.username,
     text: m.text,
     time: m.time,
     pending: false,
     live,
+    reply: r ? { id: r.id, senderId: r.sender.id, sender: r.sender.username, text: r.text } : undefined,
   };
+}
+
+function quoteOf(item?: ChatItem): ChatQuote | undefined {
+  if (item?.kind !== "msg" || item.id === undefined) return undefined;
+  return { id: item.id, senderId: item.senderId, sender: item.sender, text: item.text.slice(0, 160) };
 }
 
 // On resume, room_state carries the last 50 messages. Keep items we already show
