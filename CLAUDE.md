@@ -34,10 +34,11 @@ Don't edit `pulse/` from here. The one file Anda needs to change outside itself 
 
 One shared VM, no domain:
 
-- **Host:** `ubuntu@102.211.122.78`, SSH key `~/Downloads/test-macbook-air.pem`. Apache CloudStack KVM, Ubuntu 24.04 (the VM was rebuilt from scratch on 2026-09-30: Docker was reinstalled from Docker's apt repo, and all data, including `~/anda/.env`, started over).
-- **Size:** 2 vCPU, 4 GB RAM (3.8 GiB), 2 GB swap file, 80 GB system disk (grown by cloud-init on boot; ~70 GB free as of 2026-10-03). Resized from 1 vCPU / 961 MB / 20 GB on 2026-10-03 by moving to a bigger plan, plus a 20 GB data volume for Anda (added 2026-10-02, shared storage, `vdb`, ext4 with no reserved blocks, mounted at `/mnt/anda` by UUID in `/etc/fstab` with `nofail`).
-- **Tooling on the VM:** Docker 29 + Compose v5. No Go, Node or build tools, so build inside Docker images.
-- **Moving soon:** the user plans to move everything to a new VM (IP not known yet). Keep the host in one place (`HOST=` in `deploy.sh`) so the move is a one-line change. The data volume can be detached and attached to the new VM (it's shared storage), then mounted at `/mnt/anda` again.
+- **Host:** `ubuntu@102.211.122.76`, SSH key `~/Downloads/test-prod-mac.pem`. Apache CloudStack KVM, Ubuntu 24.04.
+- **Moved (2026-10-11)** from the old VM (`ubuntu@102.211.122.78`, key `~/Downloads/test-macbook-air.pem`; 2 vCPU, 4 GB), which stopped answering that day. Nothing came across: its 20 GB data volume can't be moved, so the database, films and `~/anda/.env` start over.
+- **Size:** 1 vCPU, 961 MB RAM, 2 GB swap file, 19 GB disk shared by everything (no data volume, so `deploy/disk.yml` stays off and the `data`/`torrent` named volumes are used; `ANDA_CACHE_GB` is 5). Anda's limits are back to the small-VM ones (API 128 MB, torrent 256 MB, LiveKit 96 MB). A bigger plan may come later; then see commit 17b077f for the 4 GB limits.
+- **Setup:** `deploy/vm-setup.sh` (run as `ssh -i <key> <host> 'sudo bash -s' < deploy/vm-setup.sh`) installs Docker from Docker's apt repo, the swap file, the delivery tuning below and the `edge` network. Safe to re-run; use it on the next VM too.
+- **Tooling on the VM:** Docker + Compose only. No Go, Node or build tools, so build inside Docker images.
 
 ### Routing
 
@@ -45,9 +46,9 @@ Caddy (`proxy/`) is the only container that publishes ports (80/443). Projects j
 
 | URL | Goes to |
 |---|---|
-| https://anda.102-211-122-78.sslip.io | Anda: `/livekit/*` → `anda-livekit:7880` (prefix stripped), everything else → `anda-api:8080` (it serves the web app too) |
-| https://pulse.102-211-122-78.sslip.io | Pulse |
-| http://102.211.122.78 (bare IP, also `localhost` on the VM) | Pulse. Keep it that way; Pulse's k6/bench scripts depend on it |
+| https://anda.102-211-122-76.sslip.io | Anda: `/livekit/*` → `anda-livekit:7880` (prefix stripped), everything else → `anda-api:8080` (it serves the web app too) |
+| https://pulse.102-211-122-76.sslip.io | Pulse |
+| http://102.211.122.76 (bare IP, also `localhost` on the VM) | Pulse. Keep it that way; Pulse's k6/bench scripts depend on it |
 
 New routes (e.g. `/ws` for step 2) go in the `anda.{$SUFFIX}` block of `proxy/Caddyfile`. Then run `proxy/deploy.sh`. It rsyncs, writes `SUFFIX` to `~/proxy/.env` on the VM, and reloads Caddy.
 
@@ -62,7 +63,7 @@ New routes (e.g. `/ws` for step 2) go in the `anda.{$SUFFIX}` block of `proxy/Ca
 - **Memory limits:** set `mem_limit` on every service (see the budget below).
 - **Builds happen on the dev machine, not the VM.** Compiling `modernc.org/sqlite` or running `next build` needs more RAM than the VM can spare, and would skew Pulse's numbers. `deploy.sh` cross-compiles Go (`CGO_ENABLED=0 GOOS=linux GOARCH=amd64`) to `server/bin/anda` and builds `web/out/`; the Dockerfiles only copy those in (alpine for the API, nginx:alpine for the web). The Mac has no Docker.
 - **Service names must be unique on `edge`.** Compose registers every service's bare name on each network it joins, so a service called `api` on `edge` answered Pulse's lookups for its own `api` (Pulse's nginx got Anda's API and returned 502, until renamed and nginx restarted: nginx resolves upstreams once at startup). Hence Anda's API service is `anda-api` (`docker compose exec anda-api ...`). Pulse uses `db`, `api`, `web`; don't reuse those on `edge`.
-- Three containers: `anda-api` (512 MB, includes ffmpeg, and serves the Next.js export from `/srv/web`, staged into `server/bin/web` by `deploy.sh`), `torrent` (`stremio/server`, 768 MB, internal only; the image is 1.7 GB), and `livekit` (alias `anda-livekit`, 256 MB; signalling through Caddy at `/livekit`). Total limits ~1.5 GB (raised from ~480 MB after the 2026-10-03 resize to 4 GB). No Node process of ours in production. `deploy.sh` runs compose with `--remove-orphans`, so a dropped service really goes.
+- Three containers: `anda-api` (128 MB, includes ffmpeg, and serves the Next.js export from `/srv/web`, staged into `server/bin/web` by `deploy.sh`), `torrent` (`stremio/server`, 256 MB, internal only; the image is 1.7 GB), and `livekit` (alias `anda-livekit`, 96 MB; signalling through Caddy at `/livekit`). Total limits ~480 MB (they were ~1.5 GB on the 4 GB VM, 2026-10-03 to 10-11). No Node process of ours in production. `deploy.sh` runs compose with `--remove-orphans`, so a dropped service really goes.
 - **The one exception to "never publish host ports":** `livekit` publishes UDP 7882, TCP 7881 and UDP 3478, because WebRTC media can't go through Caddy. Its key and secret (`LIVEKIT_KEY`, `LIVEKIT_SECRET`) and `LIVEKIT_NODE_IP` are generated into `~/anda/.env` by `deploy.sh` on first run. Local dev: build `livekit-server` from source (no macOS release binary), run it with `deploy/livekit.yaml`, and start the API with `ANDA_LIVEKIT_URL=ws://localhost:7880` plus the key and secret.
 - **`deploy.sh`**, modelled on `pulse/deploy.sh`:
   - `HOST`/`KEY` env overrides with the defaults above.

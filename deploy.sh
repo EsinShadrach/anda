@@ -4,8 +4,8 @@
 # Pulse for its ~350 MB of free RAM (no swap) and skew its benchmarks.
 set -euo pipefail
 cd "$(dirname "$0")"
-HOST="${HOST:-ubuntu@102.211.122.78}"
-KEY="${KEY:-$HOME/Downloads/test-macbook-air.pem}"
+HOST="${HOST:-ubuntu@102.211.122.76}"
+KEY="${KEY:-$HOME/Downloads/test-prod-mac.pem}"
 SSH="ssh -i $KEY $HOST"
 
 echo "==> go build (linux/amd64)"
