@@ -1,6 +1,7 @@
 package rooms
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -80,6 +81,30 @@ func (h *Handlers) invite(w http.ResponseWriter, r *http.Request) {
 		out.Owner = owner.Username
 	}
 	httpx.JSON(w, http.StatusOK, out)
+}
+
+// Invite is a room as its link preview shows it.
+type Invite struct {
+	Code, Host, Film, Year, Poster string
+	Online                         int
+}
+
+// Invite looks up a room for its link preview; ok is false if there's no such room.
+func (h *Handlers) Invite(ctx context.Context, code string) (Invite, bool) {
+	room, err := h.Manager.Lookup(ctx, code)
+	if err != nil {
+		if !errors.Is(err, ErrNotFound) {
+			h.Log.Error("lookup room", "err", err)
+		}
+		return Invite{}, false
+	}
+	inv := Invite{Code: room.Code}
+	if owner, err := h.Users.UserByID(ctx, room.OwnerID); err == nil {
+		inv.Host = owner.Username
+	}
+	v := h.Manager.Preview(ctx, room)
+	inv.Film, inv.Year, inv.Poster, inv.Online = v.Film, v.Year, v.Poster, v.Online
+	return inv, true
 }
 
 func (h *Handlers) info(w http.ResponseWriter, r *http.Request) {

@@ -138,6 +138,7 @@ type Visit struct {
 	Here   []string // their names, in join order (at most visitNames)
 	Film   string   // the film on screen, or the one it left off on; "" if none
 	Poster string
+	Year   string
 }
 
 const visitNames = 4
@@ -177,6 +178,24 @@ func (m *Manager) Presence(code string) (online int, here []string) {
 	}
 	v := <-ch
 	return v.Online, v.Here
+}
+
+// Preview is what a room's invite link shows: who's in it now, and the film on screen or
+// the one it left off on.
+func (m *Manager) Preview(ctx context.Context, room store.Room) Visit {
+	var v Visit
+	if r := m.get(room.Code); r != nil {
+		ch := make(chan Visit, 1)
+		if r.do(func() { ch <- r.visit() }) {
+			v = <-ch
+		}
+	}
+	if v.Film == "" && room.MediaID != 0 {
+		if f, err := m.media.Info(ctx, room.MediaID); err == nil {
+			v.Film, v.Poster, v.Year = f.Title, f.Poster, f.Year
+		}
+	}
+	return v
 }
 
 // End deletes a room for good, on its owner's say-so. Anyone inside is told and sent out.

@@ -348,7 +348,7 @@ func (r *Room) visit() Visit {
 		v.Here = append(v.Here, m.user.Username)
 	}
 	if r.pb.media != nil {
-		v.Film, v.Poster = r.pb.media.Title, r.pb.media.Poster
+		v.Film, v.Poster, v.Year = r.pb.media.Title, r.pb.media.Poster, r.pb.media.Year
 	}
 	return v
 }

@@ -5,15 +5,21 @@
 package site
 
 import (
+	"bytes"
 	"io/fs"
 	"net/http"
 	"os"
 	"path"
+	"slices"
+	"strconv"
 	"strings"
 )
 
 type Handler struct {
 	Dir string // the export's root, e.g. /srv/web
+	// Head, if set, returns extra tags for a page's <head> ("index", "room", ...), e.g. the
+	// Open Graph tags chat apps read for a link preview.
+	Head func(r *http.Request, page string) string
 }
 
 func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -46,6 +52,12 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		candidates = []string{"index.html"}
 	}
 	for _, name := range candidates {
+		if page, ok := strings.CutSuffix(name, ".html"); ok && h.Head != nil {
+			if b, err := fs.ReadFile(root.FS(), name); err == nil {
+				servePage(w, r, b, h.Head(r, page))
+				return
+			}
+		}
 		if serveFile(w, r, root, name, http.StatusOK) {
 			return
 		}
@@ -53,6 +65,18 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	if !serveFile(w, r, root, "404.html", http.StatusNotFound) {
 		http.NotFound(w, r)
+	}
+}
+
+// servePage serves an HTML page with head added at the end of its <head>.
+func servePage(w http.ResponseWriter, r *http.Request, page []byte, head string) {
+	if i := bytes.Index(page, []byte("</head>")); i >= 0 && head != "" {
+		page = slices.Concat(page[:i], []byte(head), page[i:])
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Length", strconv.Itoa(len(page)))
+	if r.Method == http.MethodGet {
+		w.Write(page)
 	}
 }
 

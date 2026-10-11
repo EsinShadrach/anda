@@ -19,6 +19,7 @@ import (
 	"anda/internal/library"
 	"anda/internal/media"
 	"anda/internal/notify"
+	"anda/internal/og"
 	"anda/internal/rooms"
 	"anda/internal/site"
 	"anda/internal/store"
@@ -121,7 +122,24 @@ func run(log *slog.Logger) error {
 
 	mux := http.NewServeMux()
 	authSvc.Register(mux)
-	(&rooms.Handlers{Manager: roomMgr, Users: db, Authenticate: authSvc.UserFromRequest, AllowPreview: authSvc.AllowPreview, Log: log}).Register(mux)
+	roomHandlers := &rooms.Handlers{Manager: roomMgr, Users: db, Authenticate: authSvc.UserFromRequest, AllowPreview: authSvc.AllowPreview, Log: log}
+	roomHandlers.Register(mux)
+	// Link previews (Open Graph cards) for invite links. Chat apps fetch them signed out, so
+	// they count against the same per-IP limit as the invite preview.
+	cards := &og.Service{
+		Invite: func(ctx context.Context, code string) (og.Invite, bool) {
+			inv, ok := roomHandlers.Invite(ctx, code)
+			return og.Invite(inv), ok
+		},
+		Allow: func(r *http.Request) bool {
+			if _, err := authSvc.UserFromRequest(r); err == nil {
+				return true
+			}
+			return authSvc.AllowPreview(r)
+		},
+		Log: log,
+	}
+	cards.Register(mux)
 	gw.Register(mux)
 	films.Register(mux)
 	lib.Register(mux)
@@ -134,7 +152,7 @@ func run(log *slog.Logger) error {
 		Log:          log,
 	}).Register(mux)
 	// Everything else is the web app (the Next.js static export copied into the image).
-	mux.Handle("/", site.Handler{Dir: env("ANDA_WEB", "/srv/web")})
+	mux.Handle("/", site.Handler{Dir: env("ANDA_WEB", "/srv/web"), Head: cards.Head})
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		if err := db.Ping(r.Context()); err != nil {
 			http.Error(w, "db unavailable", http.StatusServiceUnavailable)

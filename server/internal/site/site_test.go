@@ -1,6 +1,7 @@
 package site
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -46,5 +47,30 @@ func TestSite(t *testing.T) {
 	}
 	if w := get("/room"); w.Header().Get("Content-Type") != "text/html; charset=utf-8" {
 		t.Errorf("content type: %q", w.Header().Get("Content-Type"))
+	}
+}
+
+func TestSiteHead(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "room.html"), []byte("<html><head><title>Anda</title></head><body>room</body></html>"), 0o644)
+	os.WriteFile(filepath.Join(dir, "app.js"), []byte("js"), 0o644)
+	var pages []string
+	h := Handler{Dir: dir, Head: func(r *http.Request, page string) string {
+		pages = append(pages, page+"?"+r.URL.RawQuery)
+		return `<meta property="og:title" content="x"/>`
+	}}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/room?code=BCDFGH", nil))
+	want := `<title>Anda</title><meta property="og:title" content="x"/></head>`
+	if w.Code != 200 || !strings.Contains(w.Body.String(), want) || w.Header().Get("Cache-Control") != "no-cache" {
+		t.Errorf("room: %d %q cache=%q", w.Code, w.Body, w.Header().Get("Cache-Control"))
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/app.js", nil))
+	if w.Body.String() != "js" {
+		t.Errorf("app.js: %q", w.Body)
+	}
+	if len(pages) != 1 || pages[0] != "room?code=BCDFGH" {
+		t.Errorf("Head called for %q", pages)
 	}
 }
